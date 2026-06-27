@@ -2,6 +2,8 @@
 
 A Django app that provides a file system interface via [fsspec](https://filesystem-spec.readthedocs.io/), backed by Django ORM.
 
+![django-fsspec architecture](docs/assets/django-fsspec-architecture.png)
+
 ## Features
 
 - **fsspec compatible** — use standard `fsspec.filesystem("django")` API

@@ -2,6 +2,8 @@
 
 基于 Django ORM 的文件系统，通过 [fsspec](https://filesystem-spec.readthedocs.io/) 提供标准接口。
 
+![django-fsspec 架构图](docs/assets/django-fsspec-architecture.png)
+
 ## 特性
 
 - **fsspec 兼容** — 使用标准 `fsspec.filesystem("django")` API
