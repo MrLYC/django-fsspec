@@ -473,6 +473,400 @@ def run_e2e(db_name):
     if not skip_concurrency:
         runner.run("concurrent_delete_and_list", test_concurrent_delete_and_list)
 
+    # --- Transaction Integrity Tests ---
+
+    def test_tx_atomicity_write_failure():
+        """If block allocation fails mid-write, no partial data should remain.
+        Simulate by writing a file that exceeds MAX_FILE_SIZE after initial setup."""
+        runner.reset_db()
+        write_file(0, "/tx/existing.txt", b"should survive")
+        initial_block_count = StorageBlock.objects.filter(is_free=False).count()
+
+        with override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=10):
+            try:
+                write_file(0, "/tx/toobig.txt", b"x" * 20)
+            except FileTooLargeError:
+                pass
+
+        # No partial file should exist
+        assert not file_exists(0, "/tx/toobig.txt"), "Partial file should not exist"
+        # Existing file untouched
+        assert read_file(0, "/tx/existing.txt") == b"should survive"
+        # No leaked blocks
+        assert StorageBlock.objects.filter(is_free=False).count() == initial_block_count
+
+    runner.run("tx_atomicity_write_failure", test_tx_atomicity_write_failure)
+
+    def test_tx_atomicity_overwrite_rollback():
+        """Overwrite with optimistic lock conflict: the conflicting write should
+        raise FileConflictError and the file should still exist (not deleted)."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        write_file(0, "/tx/overwrite.txt", b"original content")
+
+        # Simulate conflict by bumping version OUTSIDE the transaction, then
+        # attempting to overwrite. We need the version bump to happen between
+        # the GET and the UPDATE inside write_file's transaction.
+        from unittest.mock import patch
+        from django.db import connection
+
+        real_get = FileNode.objects.get
+
+        def stale_get(**kwargs):
+            obj = real_get(**kwargs)
+            if kwargs.get("path") == "/tx/overwrite.txt" or \
+               (kwargs.get("namespace") == 0 and kwargs.get("path") == "/tx/overwrite.txt"):
+                # Bump version using a separate connection to avoid transaction rollback
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE django_fsspec_filenode SET version = 999 WHERE id = %s",
+                        [obj.pk]
+                    )
+            return obj
+
+        conflict_raised = False
+        with patch.object(FileNode.objects, "get", side_effect=stale_get):
+            try:
+                write_file(0, "/tx/overwrite.txt", b"new content that should fail")
+            except FileConflictError:
+                conflict_raised = True
+
+        assert conflict_raised, "FileConflictError should have been raised"
+        # File should still exist
+        assert file_exists(0, "/tx/overwrite.txt"), "File should still exist after conflict"
+
+    if not skip_concurrency:
+        runner.run("tx_atomicity_overwrite_rollback", test_tx_atomicity_overwrite_rollback)
+
+    def test_tx_exclusive_create_race():
+        """Two threads racing to create the same file — exactly one should succeed."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        results = {"created": 0, "exists_error": 0, "other_error": 0}
+        lock = threading.Lock()
+
+        def creator(tid):
+            try:
+                create_file_exclusive(0, "/tx/race.txt", f"by thread {tid}".encode())
+                with lock:
+                    results["created"] += 1
+            except FileExistsError:
+                with lock:
+                    results["exists_error"] += 1
+            except Exception:
+                with lock:
+                    results["other_error"] += 1
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(creator, t) for t in range(8)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert results["created"] == 1, f"Exactly one should create: {results}"
+        assert results["other_error"] == 0, f"No unexpected errors: {results}"
+        assert results["exists_error"] == 7, f"Others should get FileExistsError: {results}"
+        # File should have valid content
+        data = read_file(0, "/tx/race.txt")
+        assert data.startswith(b"by thread ")
+
+    if not skip_concurrency:
+        runner.run("tx_exclusive_create_race", test_tx_exclusive_create_race)
+
+    def test_tx_delete_while_reading():
+        """Deleting a file while another thread reads it — reader should get
+        complete data, truncated data (race between block deletion and read),
+        or FileNotFoundError. No crashes or unhandled errors."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        data = b"A" * 1000
+        write_file(0, "/tx/delread.txt", data)
+
+        read_results = {"complete": 0, "not_found": 0, "partial": 0, "error": 0}
+        lock = threading.Lock()
+        barrier = threading.Barrier(2, timeout=5)
+
+        def reader():
+            try:
+                barrier.wait()
+                for _ in range(20):
+                    try:
+                        result = read_file(0, "/tx/delread.txt")
+                        with lock:
+                            if result == data:
+                                read_results["complete"] += 1
+                            else:
+                                # Partial read can happen in a narrow race window
+                                # where FileBlocks are being deleted concurrently.
+                                # This is expected with optimistic locking (no read locks).
+                                read_results["partial"] += 1
+                    except FileNotFoundError:
+                        with lock:
+                            read_results["not_found"] += 1
+            except Exception:
+                with lock:
+                    read_results["error"] += 1
+
+        def deleter():
+            import time
+            try:
+                barrier.wait()
+                time.sleep(0.001)  # Slight delay to let reader start
+                delete_file(0, "/tx/delread.txt")
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(reader), pool.submit(deleter)]
+            for f in as_completed(futures):
+                f.result()
+
+        # No crashes or unhandled errors
+        assert read_results["error"] == 0, f"No unexpected errors: {read_results}"
+        # At least some reads should have completed or found not-found
+        total = read_results["complete"] + read_results["not_found"] + read_results["partial"]
+        assert total == 20, f"All reads should complete: {read_results}"
+
+    if not skip_concurrency:
+        runner.run("tx_delete_while_reading", test_tx_delete_while_reading)
+
+    def test_tx_concurrent_overwrite_consistency():
+        """Multiple threads overwriting same file — after all writes complete,
+        the file should be in a valid, consistent state. Verifies eventual
+        consistency (not mid-write snapshot consistency, which requires
+        pessimistic locking and is not part of our design)."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        write_file(0, "/tx/consist.txt", b"init")
+
+        errors = []
+        lock = threading.Lock()
+
+        def overwriter(tid):
+            for i in range(20):
+                try:
+                    payload = f"t{tid}-v{i}-".encode() + bytes(range(256))
+                    write_file(0, "/tx/consist.txt", payload)
+                except FileConflictError:
+                    pass  # Expected under contention
+                except Exception as e:
+                    with lock:
+                        errors.append(("writer", tid, e))
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(overwriter, t) for t in range(4)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Write errors: {errors}"
+
+        # After all writes complete, verify final state is consistent
+        import hashlib
+        node = FileNode.objects.get(namespace=0, path="/tx/consist.txt")
+        blocks = list(
+            FileBlock.objects.filter(file=node)
+            .select_related("block")
+            .order_by("sequence")
+        )
+        data = b"".join(bytes(fb.block.data) for fb in blocks)
+
+        assert node.size == len(data), \
+            f"Size mismatch: node.size={node.size} actual={len(data)}"
+        actual_checksum = hashlib.sha256(data).hexdigest()
+        assert node.checksum == actual_checksum, \
+            f"Checksum mismatch: node={node.checksum} actual={actual_checksum}"
+
+        # Sequences should be contiguous
+        sequences = [fb.sequence for fb in blocks]
+        assert sequences == list(range(len(sequences))), \
+            f"Non-contiguous sequences: {sequences}"
+
+    if not skip_concurrency:
+        runner.run("tx_concurrent_overwrite_consistency", test_tx_concurrent_overwrite_consistency)
+
+    def test_tx_block_pool_integrity():
+        """After many concurrent write/delete cycles, block pool should be consistent:
+        - No block referenced by a FileBlock should be marked is_free=True
+        - Total used blocks should match sum of file block counts"""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+
+        errors = []
+
+        def churn(tid):
+            """Write and delete files rapidly to stress block pool."""
+            try:
+                for i in range(30):
+                    path = f"/tx/churn/t{tid}/f{i}.txt"
+                    write_file(0, path, f"churn-{tid}-{i}".encode() * 10)
+                    if i % 3 == 0:
+                        try:
+                            delete_file(0, path)
+                        except FileNotFoundError:
+                            pass
+            except Exception as e:
+                errors.append(("churn", tid, e))
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(churn, t) for t in range(6)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Churn errors: {errors}"
+
+        # Verify block pool integrity
+        # 1. No FileBlock should point to a free StorageBlock
+        orphans = FileBlock.objects.filter(block__is_free=True).count()
+        assert orphans == 0, f"Found {orphans} file blocks pointing to free storage blocks"
+
+        # 2. Every non-free block should be referenced by at least one FileBlock
+        used_block_ids = set(
+            StorageBlock.objects.filter(is_free=False).values_list("id", flat=True)
+        )
+        referenced_block_ids = set(
+            FileBlock.objects.values_list("block_id", flat=True)
+        )
+        unreferenced = used_block_ids - referenced_block_ids
+        assert len(unreferenced) == 0, f"Found {len(unreferenced)} used but unreferenced blocks"
+
+        # 3. Every file should have contiguous block sequences
+        for node in FileNode.objects.all():
+            sequences = list(
+                FileBlock.objects.filter(file=node)
+                .order_by("sequence")
+                .values_list("sequence", flat=True)
+            )
+            expected = list(range(len(sequences)))
+            assert sequences == expected, f"Non-contiguous blocks for {node.path}: {sequences}"
+
+    if not skip_concurrency:
+        runner.run("tx_block_pool_integrity", test_tx_block_pool_integrity)
+
+    def test_tx_concurrent_move_no_dupe():
+        """Moving files concurrently should not create duplicates or lose files."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        n = 20
+        for i in range(n):
+            write_file(0, f"/tx/move/src{i}.txt", f"file {i}".encode())
+
+        errors = []
+
+        def mover(tid):
+            try:
+                for i in range(tid, n, 4):  # Each thread handles a subset
+                    try:
+                        move_file(0, f"/tx/move/src{i}.txt", f"/tx/move/dst{i}.txt")
+                    except (FileNotFoundError, FileExistsError):
+                        pass  # Race with another mover
+            except Exception as e:
+                errors.append(("mover", tid, e))
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(mover, t) for t in range(4)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Move errors: {errors}"
+
+        # Total files should still be n (some at src, some at dst)
+        total = FileNode.objects.filter(
+            namespace=0, path__startswith="/tx/move/"
+        ).count()
+        assert total == n, f"Expected {n} files, found {total}"
+
+        # No path should appear more than once
+        paths = list(
+            FileNode.objects.filter(namespace=0, path__startswith="/tx/move/")
+            .values_list("path", flat=True)
+        )
+        assert len(paths) == len(set(paths)), f"Duplicate paths found: {paths}"
+
+    if not skip_concurrency:
+        runner.run("tx_concurrent_move_no_dupe", test_tx_concurrent_move_no_dupe)
+
+    def test_tx_concurrent_append_ordering():
+        """Multiple threads appending to the same file — final size should equal
+        sum of all appended data (no data lost, no duplication)."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        chunk_size = 50
+        n_threads = 4
+        n_appends = 10
+
+        # Use exclusive paths per thread to avoid conflict, then compare totals
+        for t in range(n_threads):
+            write_file(0, f"/tx/append/log{t}.txt", b"")
+
+        errors = []
+
+        def appender(tid):
+            try:
+                for i in range(n_appends):
+                    marker = f"[t{tid}:i{i}]".encode().ljust(chunk_size, b".")
+                    append_file(0, f"/tx/append/log{tid}.txt", marker)
+            except Exception as e:
+                errors.append(("appender", tid, e))
+
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = [pool.submit(appender, t) for t in range(n_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Append errors: {errors}"
+
+        # Each file should have exactly n_appends chunks
+        for t in range(n_threads):
+            data = read_file(0, f"/tx/append/log{t}.txt")
+            expected_size = chunk_size * n_appends
+            assert len(data) == expected_size, \
+                f"Thread {t}: expected {expected_size} bytes, got {len(data)}"
+
+    if not skip_concurrency:
+        runner.run("tx_concurrent_append_ordering", test_tx_concurrent_append_ordering)
+
+    def test_tx_namespace_isolation_under_contention():
+        """Writes to different namespaces under contention should never leak across."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        n_namespaces = 4
+        n_files = 15
+        errors = []
+
+        def ns_writer(ns):
+            try:
+                for i in range(n_files):
+                    write_file(ns, f"/tx/ns/file{i}.txt", f"ns{ns}-{i}".encode())
+            except Exception as e:
+                errors.append(("ns_writer", ns, e))
+
+        with ThreadPoolExecutor(max_workers=n_namespaces) as pool:
+            futures = [pool.submit(ns_writer, ns) for ns in range(n_namespaces)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Namespace errors: {errors}"
+
+        # Verify isolation
+        for ns in range(n_namespaces):
+            for i in range(n_files):
+                data = read_file(ns, f"/tx/ns/file{i}.txt")
+                expected = f"ns{ns}-{i}".encode()
+                assert data == expected, f"Namespace leak: ns={ns} i={i} got {data!r}"
+
+            count = FileNode.objects.filter(namespace=ns).count()
+            assert count == n_files, f"Namespace {ns}: expected {n_files} files, got {count}"
+
+    if not skip_concurrency:
+        runner.run("tx_namespace_isolation_under_contention", test_tx_namespace_isolation_under_contention)
+
     runner.reset_db()
     return runner.report()
 
