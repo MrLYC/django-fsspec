@@ -179,6 +179,121 @@ def scenario_seek_read(fs, n=100):
     return {"op": "seek_read", "count": n, "file_size": 1048576, "times": times}
 
 
+def scenario_concurrent_write(fs, n_threads=8, n_files=100):
+    """Concurrent writes to different files using thread pool."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    data = b"x" * 200
+    # Pre-generate paths
+    paths = [f"/bench/conc_write/{i}.txt" for i in range(n_files)]
+
+    def write_batch(thread_id, batch):
+        for path in batch:
+            fs.pipe(path, data)
+
+    # Split files across threads
+    batch_size = n_files // n_threads
+    batches = [paths[i * batch_size:(i + 1) * batch_size] for i in range(n_threads)]
+
+    _, total_time = timed(lambda: _run_concurrent(write_batch, batches))
+
+    return {
+        "op": f"concurrent_write_{n_threads}t",
+        "count": n_files,
+        "threads": n_threads,
+        "file_size": 200,
+        "times": [total_time / n_files] * n_files,  # Distribute total time
+        "total_wall_s": total_time,
+    }
+
+
+def scenario_concurrent_read(fs, n_threads=8, n_files=100):
+    """Concurrent reads from different files using thread pool."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Setup: write files
+    data = b"x" * 200
+    for i in range(n_files):
+        fs.pipe(f"/bench/conc_read/{i}.txt", data)
+
+    paths = [f"/bench/conc_read/{i}.txt" for i in range(n_files)]
+
+    def read_batch(thread_id, batch):
+        for path in batch:
+            fs.cat(path)
+
+    batch_size = n_files // n_threads
+    batches = [paths[i * batch_size:(i + 1) * batch_size] for i in range(n_threads)]
+
+    _, total_time = timed(lambda: _run_concurrent(read_batch, batches))
+
+    return {
+        "op": f"concurrent_read_{n_threads}t",
+        "count": n_files,
+        "threads": n_threads,
+        "file_size": 200,
+        "times": [total_time / n_files] * n_files,
+        "total_wall_s": total_time,
+    }
+
+
+def scenario_concurrent_mixed(fs, n_threads=8, n_ops=200):
+    """Mixed concurrent reads and writes (50/50 split)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    data = b"y" * 200
+    # Pre-populate read targets
+    for i in range(n_ops // 2):
+        fs.pipe(f"/bench/conc_mixed/read{i}.txt", data)
+
+    def mixed_batch(thread_id, batch):
+        for i, op_type in batch:
+            if op_type == "write":
+                fs.pipe(f"/bench/conc_mixed/write_t{thread_id}_{i}.txt", data)
+            else:
+                fs.cat(f"/bench/conc_mixed/read{i}.txt")
+
+    # Build mixed workload: alternate read/write
+    all_ops = []
+    for i in range(n_ops):
+        if i % 2 == 0:
+            all_ops.append((i // 2, "read"))
+        else:
+            all_ops.append((i // 2, "write"))
+
+    batch_size = n_ops // n_threads
+    batches = [all_ops[i * batch_size:(i + 1) * batch_size] for i in range(n_threads)]
+
+    _, total_time = timed(lambda: _run_concurrent(mixed_batch, batches))
+
+    return {
+        "op": f"concurrent_mixed_{n_threads}t",
+        "count": n_ops,
+        "threads": n_threads,
+        "times": [total_time / n_ops] * n_ops,
+        "total_wall_s": total_time,
+    }
+
+
+def _run_concurrent(func, batches):
+    """Run func(thread_id, batch) concurrently for each batch."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from django.db import close_old_connections
+
+    def wrapped(thread_id, batch):
+        close_old_connections()
+        try:
+            return func(thread_id, batch)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        futures = [pool.submit(wrapped, i, batch) for i, batch in enumerate(batches)]
+        for f in as_completed(futures):
+            f.result()  # Raise on error
+
+
 ALL_SCENARIOS = {
     "write_small": scenario_write_small,
     "write_medium": scenario_write_medium,
@@ -190,6 +305,9 @@ ALL_SCENARIOS = {
     "ls_nested": scenario_ls_nested,
     "delete": scenario_delete,
     "seek_read": scenario_seek_read,
+    "concurrent_write": scenario_concurrent_write,
+    "concurrent_read": scenario_concurrent_read,
+    "concurrent_mixed": scenario_concurrent_mixed,
 }
 
 
@@ -201,7 +319,14 @@ def summarize(result):
     result["p50_ms"] = statistics.median(times) * 1000
     result["p95_ms"] = sorted(times)[int(len(times) * 0.95)] * 1000
     result["p99_ms"] = sorted(times)[int(len(times) * 0.99)] * 1000
-    result["ops_per_sec"] = len(times) / sum(times) if sum(times) > 0 else 0
+
+    # For concurrent scenarios, use wall time for ops/sec calculation
+    if "total_wall_s" in result:
+        wall = result["total_wall_s"]
+        result["ops_per_sec"] = len(times) / wall if wall > 0 else 0
+    else:
+        result["ops_per_sec"] = len(times) / sum(times) if sum(times) > 0 else 0
+
     del result["times"]  # Don't print raw times
     return result
 
@@ -225,11 +350,15 @@ def run_benchmark(db_name, scenarios):
             result = summarize(result)
             result["db"] = db_name
             results.append(result)
+            extra = ""
+            if "total_wall_s" in result:
+                extra = f"  wall={result['total_wall_s']:.2f}s  threads={result.get('threads', '?')}"
             print(
                 f"done  "
                 f"avg={result['avg_ms']:.2f}ms  "
                 f"p95={result['p95_ms']:.2f}ms  "
                 f"ops/s={result['ops_per_sec']:.0f}"
+                f"{extra}"
             )
         except Exception as e:
             print(f"FAILED: {e}")
@@ -291,51 +420,40 @@ def main():
     else:
         scenarios = ALL_SCENARIOS
 
+    # When --db is specified, use the current process (env var already set at startup).
+    # When running multiple DBs, spawn subprocesses to avoid Django settings conflicts.
     db_list = [args.db] if args.db else ["sqlite", "mysql", "postgres"]
     all_results = []
 
-    db_configs = {
-        "sqlite": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": os.path.join(os.path.dirname(__file__), "bench.sqlite3"),
-        },
-        "mysql": {
-            "ENGINE": "django.db.backends.mysql",
-            "NAME": os.environ.get("MYSQL_DATABASE", "fsspec_test"),
-            "USER": os.environ.get("MYSQL_USER", "fsspec"),
-            "PASSWORD": os.environ.get("MYSQL_PASSWORD", "fsspec_test"),
-            "HOST": os.environ.get("MYSQL_HOST", "127.0.0.1"),
-            "PORT": os.environ.get("MYSQL_PORT", "13306"),
-            "OPTIONS": {"charset": "utf8mb4"},
-        },
-        "postgres": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("POSTGRES_DB", "fsspec_test"),
-            "USER": os.environ.get("POSTGRES_USER", "fsspec"),
-            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "fsspec_test"),
-            "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
-            "PORT": os.environ.get("POSTGRES_PORT", "15432"),
-        },
-        "oracle": {
-            "ENGINE": "django.db.backends.oracle",
-            "NAME": os.environ.get("ORACLE_DSN", "127.0.0.1:1521/FREEPDB1"),
-            "USER": os.environ.get("ORACLE_USER", "fsspec"),
-            "PASSWORD": os.environ.get("ORACLE_PASSWORD", "fsspec_test"),
-        },
-    }
-
-    for db in db_list:
-        os.environ["DJANGO_FSSPEC_BENCH_DB"] = db
-
-        from django.conf import settings
-        settings.DATABASES["default"] = db_configs[db]
-
-        from django.db import connections
-        for conn in connections.all():
-            conn.close()
-
-        results = run_benchmark(db, scenarios)
+    if args.db:
+        # Single DB mode — current process, env var DJANGO_FSSPEC_BENCH_DB already set
+        results = run_benchmark(args.db, scenarios)
         all_results.extend(results)
+    else:
+        # Multi-DB mode — run each as subprocess to get clean Django init
+        import subprocess
+        scenario_arg = ["--scenario", args.scenario] if args.scenario else []
+        json_files = []
+        for db in db_list:
+            json_file = f"/tmp/bench_{db}.json"
+            json_files.append((db, json_file))
+            env = os.environ.copy()
+            env["DJANGO_FSSPEC_BENCH_DB"] = db
+            result = subprocess.run(
+                [sys.executable, __file__, "--db", db, "--json", json_file] + scenario_arg,
+                env=env, capture_output=True, text=True,
+            )
+            print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+
+        # Collect results
+        for db, json_file in json_files:
+            try:
+                with open(json_file) as f:
+                    all_results.extend(json.load(f))
+            except FileNotFoundError:
+                pass
 
     print_summary_table(all_results)
 

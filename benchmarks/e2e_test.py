@@ -317,6 +317,162 @@ def run_e2e(db_name):
 
     runner.run("block_size_coexistence", test_block_size_coexistence)
 
+    # --- Concurrency Tests (skipped on SQLite — no concurrent write support) ---
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    skip_concurrency = db_name == "sqlite"
+    if skip_concurrency:
+        print("  (skipping concurrency tests — SQLite does not support concurrent writes)")
+
+    def test_concurrent_write_different_files():
+        """Multiple threads writing to different files simultaneously."""
+        runner.reset_db()
+        n_threads = 8
+        n_files_per_thread = 20
+        errors = []
+
+        def writer(thread_id):
+            try:
+                for i in range(n_files_per_thread):
+                    write_file(0, f"/conc/t{thread_id}/file{i}.txt", f"thread {thread_id} file {i}".encode())
+            except Exception as e:
+                errors.append((thread_id, e))
+
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = [pool.submit(writer, t) for t in range(n_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+        # Verify all files exist and have correct content
+        for t in range(n_threads):
+            for i in range(n_files_per_thread):
+                data = read_file(0, f"/conc/t{t}/file{i}.txt")
+                assert data == f"thread {t} file {i}".encode(), f"Data mismatch: t={t} i={i}"
+
+        total = FileNode.objects.filter(namespace=0, path__startswith="/conc/").count()
+        assert total == n_threads * n_files_per_thread
+
+    if not skip_concurrency:
+        runner.run("concurrent_write_different_files", test_concurrent_write_different_files)
+
+    def test_concurrent_write_same_file():
+        """Multiple threads writing to the same file — one wins, others may get FileConflictError."""
+        runner.reset_db()
+        write_file(0, "/conc_same.txt", b"initial")
+
+        n_threads = 8
+        results = {"success": 0, "conflict": 0, "other_error": 0}
+        lock = threading.Lock()
+
+        def writer(thread_id):
+            try:
+                write_file(0, "/conc_same.txt", f"written by thread {thread_id}".encode())
+                with lock:
+                    results["success"] += 1
+            except FileConflictError:
+                with lock:
+                    results["conflict"] += 1
+            except Exception:
+                with lock:
+                    results["other_error"] += 1
+
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = [pool.submit(writer, t) for t in range(n_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        # At least one should succeed
+        assert results["success"] >= 1, f"No successful writes: {results}"
+        assert results["other_error"] == 0, f"Unexpected errors: {results}"
+        # File should exist with valid content
+        data = read_file(0, "/conc_same.txt")
+        assert data.startswith(b"written by thread ")
+
+    if not skip_concurrency:
+        runner.run("concurrent_write_same_file", test_concurrent_write_same_file)
+
+    def test_concurrent_read_while_write():
+        """Readers should get consistent data while writers update different files."""
+        runner.reset_db()
+        # Pre-populate files for reading
+        for i in range(20):
+            write_file(0, f"/conc_rw/read{i}.txt", f"read data {i}".encode())
+
+        errors = []
+        writer_id_counter = [0]
+        counter_lock = threading.Lock()
+
+        def reader():
+            try:
+                for i in range(20):
+                    data = read_file(0, f"/conc_rw/read{i}.txt")
+                    assert data == f"read data {i}".encode()
+            except Exception as e:
+                errors.append(("reader", e))
+
+        def writer():
+            with counter_lock:
+                wid = writer_id_counter[0]
+                writer_id_counter[0] += 1
+            try:
+                for i in range(20):
+                    write_file(0, f"/conc_rw/w{wid}/file{i}.txt", f"write data {wid}-{i}".encode())
+            except Exception as e:
+                errors.append(("writer", e))
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = []
+            # 3 readers + 3 writers (each writing to unique paths)
+            for _ in range(3):
+                futures.append(pool.submit(reader))
+                futures.append(pool.submit(writer))
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+    if not skip_concurrency:
+        runner.run("concurrent_read_while_write", test_concurrent_read_while_write)
+
+    def test_concurrent_delete_and_list():
+        """Delete and list operations running concurrently."""
+        runner.reset_db()
+        for i in range(50):
+            write_file(0, f"/conc_dl/file{i}.txt", b"data")
+
+        errors = []
+
+        def deleter():
+            try:
+                for i in range(50):
+                    try:
+                        delete_file(0, f"/conc_dl/file{i}.txt")
+                    except FileNotFoundError:
+                        pass  # Already deleted by another thread or race
+            except Exception as e:
+                errors.append(("deleter", e))
+
+        def lister():
+            try:
+                for _ in range(10):
+                    list_directory(0, "/conc_dl")
+            except Exception as e:
+                errors.append(("lister", e))
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(deleter), pool.submit(deleter),
+                       pool.submit(lister), pool.submit(lister)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+    if not skip_concurrency:
+        runner.run("concurrent_delete_and_list", test_concurrent_delete_and_list)
+
     runner.reset_db()
     return runner.report()
 
