@@ -74,12 +74,10 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: E2E tests
-        run: |
-          DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/e2e_test.py
+        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/e2e_test.py
 
       - name: Benchmark
-        run: |
-          DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --json benchmarks/results-sqlite.json
+        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --json benchmarks/results-sqlite.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -90,9 +88,12 @@ jobs:
   e2e-mysql:
     needs: unit-test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        mysql-version: ["5.7", "8.0"]
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:${{ matrix.mysql-version }}
         env:
           MYSQL_ROOT_PASSWORD: fsspec_test
           MYSQL_DATABASE: fsspec_test
@@ -123,28 +124,29 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: |
-          python benchmarks/e2e_test.py
+        run: python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: |
-          python benchmarks/run.py --db mysql --json benchmarks/results-mysql.json
+        run: python benchmarks/run.py --db mysql --json benchmarks/results-mysql-${{ matrix.mysql-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-mysql
-          path: benchmarks/results-mysql.json
+          name: benchmark-mysql-${{ matrix.mysql-version }}
+          path: benchmarks/results-mysql-${{ matrix.mysql-version }}.json
 
   e2e-postgres:
     needs: unit-test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pg-version: ["9.3", "16"]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.pg-version }}
         env:
           POSTGRES_DB: fsspec_test
           POSTGRES_USER: fsspec
@@ -174,21 +176,19 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: |
-          python benchmarks/e2e_test.py
+        run: python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: |
-          python benchmarks/run.py --db postgres --json benchmarks/results-postgres.json
+        run: python benchmarks/run.py --db postgres --json benchmarks/results-postgres-${{ matrix.pg-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-postgres
-          path: benchmarks/results-postgres.json
+          name: benchmark-postgres-${{ matrix.pg-version }}
+          path: benchmarks/results-postgres-${{ matrix.pg-version }}.json
 
   e2e-oracle:
     needs: unit-test
@@ -225,14 +225,12 @@ jobs:
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
-        run: |
-          python benchmarks/e2e_test.py
+        run: python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
-        run: |
-          python benchmarks/run.py --db oracle --json benchmarks/results-oracle.json
+        run: python benchmarks/run.py --db oracle --json benchmarks/results-oracle.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -263,14 +261,13 @@ jobs:
       - name: Generate baseline report
         run: |
           python -c "
-          import json, glob, os
+          import json, glob
 
           all_results = []
           for f in sorted(glob.glob('benchmarks/results/**/*.json', recursive=True)):
               with open(f) as fh:
                   all_results.extend(json.load(fh))
 
-          # Print comparison table
           ops = {}
           for r in all_results:
               op = r.get('op', '?')
