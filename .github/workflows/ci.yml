@@ -122,9 +122,11 @@ jobs:
 
       - name: Configure MySQL charset
         run: |
-          mysql -h 127.0.0.1 -P 3306 -u root -pfsspec_test -e "
-            ALTER DATABASE fsspec_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-          "
+          for i in 1 2 3 4 5; do
+            mysql -h 127.0.0.1 -P 3306 -u root -pfsspec_test -e "
+              ALTER DATABASE fsspec_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            " && break || sleep 3
+          done
 
       - name: Install dependencies
         run: |
