@@ -1,11 +1,52 @@
+from django.db import transaction as db_transaction
 from fsspec.spec import AbstractFileSystem
+from fsspec.transaction import Transaction
 
 from . import operations
 from .buffer import DjangoFile
 
 
+class DjangoTransaction(Transaction):
+    """Filesystem transaction backed by Django database transaction.
+
+    Wraps all file operations in a Django transaction.atomic() savepoint.
+    On commit, the savepoint is released. On discard, it is rolled back.
+    """
+
+    def start(self):
+        self.files = []
+        self.fs._intrans = True
+        self._atomic = db_transaction.atomic()
+        self._atomic.__enter__()
+
+    def complete(self, commit=True):
+        try:
+            if not commit:
+                # Roll back the savepoint by raising an exception
+                db_transaction.set_rollback(True)
+        finally:
+            try:
+                self._atomic.__exit__(
+                    None if commit else RuntimeError,
+                    None if commit else RuntimeError("Transaction discarded"),
+                    None,
+                )
+            except RuntimeError:
+                pass  # Expected when discarding
+            self.fs._intrans = False
+            self.fs._transaction = None
+            self.fs = None
+
+
 class DjangoFileSystem(AbstractFileSystem):
     """A filesystem backed by Django ORM.
+
+    Supports fsspec transactions via Django database transactions:
+
+        with fs.transaction:
+            fs.pipe("/a.txt", b"data a")
+            fs.pipe("/b.txt", b"data b")
+            # Both committed together, or both rolled back on exception
 
     Parameters
     ----------
@@ -14,6 +55,7 @@ class DjangoFileSystem(AbstractFileSystem):
     """
 
     protocol = "django"
+    transaction_type = DjangoTransaction
 
     def __init__(self, namespace=0, **kwargs):
         super().__init__(**kwargs)

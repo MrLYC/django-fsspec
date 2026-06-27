@@ -218,3 +218,88 @@ class TestDjangoFileSystemFsspec(TestCase):
         fs.pipe("/roundtrip.txt", b"fsspec data")
         assert fs.cat("/roundtrip.txt") == b"fsspec data"
         fs.rm("/roundtrip.txt")
+
+
+class TestDjangoTransaction(TestCase):
+    """Test fsspec transaction backed by Django database transaction."""
+
+    def setUp(self):
+        self.fs = DjangoFileSystem(namespace=0)
+
+    def test_transaction_commit(self):
+        """Files written in a transaction should be visible after commit."""
+        with self.fs.transaction:
+            self.fs.pipe("/tx/a.txt", b"aaa")
+            self.fs.pipe("/tx/b.txt", b"bbb")
+
+        assert self.fs.cat("/tx/a.txt") == b"aaa"
+        assert self.fs.cat("/tx/b.txt") == b"bbb"
+
+    def test_transaction_rollback_on_exception(self):
+        """Files written in a transaction should be rolled back on exception."""
+        from django_fsspec.models import FileNode
+
+        try:
+            with self.fs.transaction:
+                self.fs.pipe("/tx/will_rollback.txt", b"data")
+                # Verify it's written within the transaction
+                assert FileNode.objects.filter(path="/tx/will_rollback.txt").exists()
+                raise ValueError("Intentional error")
+        except ValueError:
+            pass
+
+        # After rollback, file should not exist
+        assert not self.fs.exists("/tx/will_rollback.txt")
+        assert not FileNode.objects.filter(path="/tx/will_rollback.txt").exists()
+
+    def test_transaction_rollback_blocks_cleaned(self):
+        """Rolled back transaction should not leave orphaned storage blocks."""
+        from django_fsspec.models import StorageBlock
+
+        initial_blocks = StorageBlock.objects.count()
+
+        try:
+            with self.fs.transaction:
+                self.fs.pipe("/tx/block_test.txt", b"some data here")
+                raise ValueError("Rollback")
+        except ValueError:
+            pass
+
+        assert StorageBlock.objects.count() == initial_blocks
+
+    def test_transaction_partial_rollback(self):
+        """Data written before the transaction should survive the rollback."""
+        self.fs.pipe("/tx/before.txt", b"before transaction")
+
+        try:
+            with self.fs.transaction:
+                self.fs.pipe("/tx/during.txt", b"during transaction")
+                raise ValueError("Rollback")
+        except ValueError:
+            pass
+
+        assert self.fs.cat("/tx/before.txt") == b"before transaction"
+        assert not self.fs.exists("/tx/during.txt")
+
+    def test_transaction_multiple_operations(self):
+        """Mix of write, overwrite, delete within a transaction."""
+        self.fs.pipe("/tx/existing.txt", b"original")
+
+        with self.fs.transaction:
+            self.fs.pipe("/tx/new.txt", b"new file")
+            self.fs.pipe("/tx/existing.txt", b"overwritten")
+            self.fs.rm("/tx/new.txt")
+
+        assert self.fs.cat("/tx/existing.txt") == b"overwritten"
+        assert not self.fs.exists("/tx/new.txt")
+
+    def test_transaction_type(self):
+        """DjangoFileSystem should use DjangoTransaction."""
+        from django_fsspec.fs import DjangoTransaction
+
+        assert self.fs.transaction_type is DjangoTransaction
+
+    def test_no_transaction_autocommit(self):
+        """Without transaction, each operation commits immediately."""
+        self.fs.pipe("/tx/auto.txt", b"auto")
+        assert self.fs.exists("/tx/auto.txt")

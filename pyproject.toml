@@ -63,7 +63,7 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["django_fsspec"]
-omit = ["django_fsspec/tests/*", "django_fsspec/migrations/*"]
+omit = ["django_fsspec/tests/*", "django_fsspec/migrations/*", "django_fsspec/_version.py"]
 
 [tool.coverage.report]
 show_missing = true
