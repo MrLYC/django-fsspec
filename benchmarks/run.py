@@ -278,7 +278,7 @@ def main():
     )
     parser.add_argument(
         "--db", type=str, default=None,
-        help="Run specific database: sqlite, mysql, postgres (default: all)",
+        help="Run specific database: sqlite, mysql, postgres, oracle (default: all except oracle)",
     )
     parser.add_argument(
         "--json", type=str, default=None,
@@ -294,37 +294,42 @@ def main():
     db_list = [args.db] if args.db else ["sqlite", "mysql", "postgres"]
     all_results = []
 
+    db_configs = {
+        "sqlite": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.path.join(os.path.dirname(__file__), "bench.sqlite3"),
+        },
+        "mysql": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.environ.get("MYSQL_DATABASE", "fsspec_test"),
+            "USER": os.environ.get("MYSQL_USER", "fsspec"),
+            "PASSWORD": os.environ.get("MYSQL_PASSWORD", "fsspec_test"),
+            "HOST": os.environ.get("MYSQL_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("MYSQL_PORT", "13306"),
+            "OPTIONS": {"charset": "utf8mb4"},
+        },
+        "postgres": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "fsspec_test"),
+            "USER": os.environ.get("POSTGRES_USER", "fsspec"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "fsspec_test"),
+            "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("POSTGRES_PORT", "15432"),
+        },
+        "oracle": {
+            "ENGINE": "django.db.backends.oracle",
+            "NAME": os.environ.get("ORACLE_DSN", "127.0.0.1:1521/FREEPDB1"),
+            "USER": os.environ.get("ORACLE_USER", "fsspec"),
+            "PASSWORD": os.environ.get("ORACLE_PASSWORD", "fsspec_test"),
+        },
+    }
+
     for db in db_list:
         os.environ["DJANGO_FSSPEC_BENCH_DB"] = db
 
-        # Reload settings for new DB
         from django.conf import settings
-        if db == "mysql":
-            settings.DATABASES["default"] = {
-                "ENGINE": "django.db.backends.mysql",
-                "NAME": "fsspec_test",
-                "USER": "fsspec",
-                "PASSWORD": "fsspec_test",
-                "HOST": "127.0.0.1",
-                "PORT": "13306",
-                "OPTIONS": {"charset": "utf8mb4"},
-            }
-        elif db == "postgres":
-            settings.DATABASES["default"] = {
-                "ENGINE": "django.db.backends.postgresql",
-                "NAME": "fsspec_test",
-                "USER": "fsspec",
-                "PASSWORD": "fsspec_test",
-                "HOST": "127.0.0.1",
-                "PORT": "15432",
-            }
-        else:
-            settings.DATABASES["default"] = {
-                "ENGINE": "django.db.backends.sqlite3",
-                "NAME": os.path.join(os.path.dirname(__file__), "bench.sqlite3"),
-            }
+        settings.DATABASES["default"] = db_configs[db]
 
-        # Reset connections
         from django.db import connections
         for conn in connections.all():
             conn.close()
