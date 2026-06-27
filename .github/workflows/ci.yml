@@ -90,7 +90,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        mysql-version: ["5.7", "8.0"]
+        include:
+          - mysql-version: "5.7"
+            django-version: "3.2"
+          - mysql-version: "8.0"
+            django-version: "5.2"
     services:
       mysql:
         image: mysql:${{ matrix.mysql-version }}
@@ -119,6 +123,7 @@ jobs:
         run: |
           pip install -e ".[dev]"
           pip install mysqlclient
+          pip install "django~=${{ matrix.django-version }}.0"
 
       - name: E2E tests
         env:
@@ -143,7 +148,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        pg-version: ["9.3", "16"]
+        include:
+          - pg-version: "9.6"
+            django-version: "3.2"
+          - pg-version: "16"
+            django-version: "5.2"
     services:
       postgres:
         image: postgres:${{ matrix.pg-version }}
@@ -171,6 +180,7 @@ jobs:
         run: |
           pip install -e ".[dev]"
           pip install psycopg2-binary
+          pip install "django~=${{ matrix.django-version }}.0"
 
       - name: E2E tests
         env:
