@@ -53,41 +53,41 @@ UPDATE file_node SET ... WHERE pk=X AND version=old_version
 
 ## 性能基线
 
-在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。数据来自 2026-06-27 CI 运行。格式：平均延迟 / 吞吐量。
+在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。格式：平均延迟 / 吞吐量。由 CI 自动更新。
 
 ### 写入操作
 
 | 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
 |------|--------|-----------|-----------|--------|-------|-----------|
-| 写入小文件 (100B) | 2.61ms / 383 ops/s | 3.53ms / 283 ops/s | 4.47ms / 224 ops/s | 3.08ms / 325 ops/s | 2.86ms / 350 ops/s | 4.33ms / 231 ops/s |
-| 写入中文件 (10KB) | 2.88ms / 347 ops/s | 3.74ms / 267 ops/s | 4.86ms / 206 ops/s | 3.17ms / 315 ops/s | 2.98ms / 336 ops/s | 3.73ms / 268 ops/s |
-| 写入大文件 (1MB) | 6.81ms / 147 ops/s | 23.08ms / 43 ops/s | 27.29ms / 37 ops/s | 26.07ms / 38 ops/s | 26.07ms / 38 ops/s | 11.29ms / 89 ops/s |
-| 覆盖写 | 4.10ms / 244 ops/s | 7.33ms / 136 ops/s | 8.88ms / 113 ops/s | 6.77ms / 148 ops/s | 6.11ms / 164 ops/s | 7.29ms / 137 ops/s |
+| 写入小文件 (100B) | 2.22ms / 450 ops/s | 3.53ms / 283 ops/s | 4.43ms / 226 ops/s | 2.89ms / 346 ops/s | 3.00ms / 333 ops/s | 3.20ms / 313 ops/s |
+| 写入中文件 (10KB) | 2.31ms / 433 ops/s | 3.77ms / 265 ops/s | 4.90ms / 204 ops/s | 3.00ms / 334 ops/s | 3.11ms / 321 ops/s | 3.61ms / 277 ops/s |
+| 写入大文件 (1MB) | 6.63ms / 151 ops/s | 22.64ms / 44 ops/s | 28.03ms / 36 ops/s | 28.26ms / 35 ops/s | 24.00ms / 42 ops/s | 11.30ms / 88 ops/s |
+| 覆盖写 | 3.76ms / 266 ops/s | 7.30ms / 137 ops/s | 9.14ms / 109 ops/s | 6.32ms / 158 ops/s | 6.27ms / 159 ops/s | 7.17ms / 139 ops/s |
 
 ### 读取操作
 
 | 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
 |------|--------|-----------|-----------|--------|-------|-----------|
-| 读取小文件 (100B) | 1.32ms / 755 ops/s | 2.33ms / 430 ops/s | 2.46ms / 406 ops/s | 2.58ms / 387 ops/s | 2.41ms / 415 ops/s | 2.65ms / 378 ops/s |
-| 读取大文件 (1MB) | 1.78ms / 561 ops/s | 4.17ms / 240 ops/s | 4.89ms / 204 ops/s | 10.55ms / 95 ops/s | 8.05ms / 124 ops/s | 5.66ms / 177 ops/s |
-| 随机读 (seek+read) | 1.48ms / 675 ops/s | 3.02ms / 331 ops/s | 3.19ms / 314 ops/s | 4.93ms / 203 ops/s | 4.85ms / 206 ops/s | 3.88ms / 258 ops/s |
+| 读取小文件 (100B) | 1.19ms / 841 ops/s | 2.35ms / 426 ops/s | 2.43ms / 411 ops/s | 2.17ms / 460 ops/s | 2.32ms / 431 ops/s | 2.56ms / 390 ops/s |
+| 读取大文件 (1MB) | 1.67ms / 598 ops/s | 4.04ms / 248 ops/s | 4.48ms / 223 ops/s | 10.88ms / 92 ops/s | 7.77ms / 129 ops/s | 5.48ms / 183 ops/s |
+| 随机读 (seek+read) | 1.36ms / 738 ops/s | 2.99ms / 334 ops/s | 3.20ms / 312 ops/s | 4.70ms / 213 ops/s | 4.59ms / 218 ops/s | 3.69ms / 271 ops/s |
 
 ### 目录和删除操作
 
 | 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
 |------|--------|-----------|-----------|--------|-------|-----------|
-| 列目录 (1000 文件) | 2.72ms / 367 ops/s | 8.19ms / 122 ops/s | 5.14ms / 195 ops/s | 4.15ms / 241 ops/s | 3.87ms / 258 ops/s | 6.31ms / 158 ops/s |
-| 列嵌套目录 (100 子目录) | 2.29ms / 436 ops/s | 5.59ms / 179 ops/s | 4.05ms / 247 ops/s | 3.87ms / 258 ops/s | 3.56ms / 281 ops/s | 3.43ms / 292 ops/s |
-| 删除 | 3.10ms / 323 ops/s | 4.56ms / 219 ops/s | 5.54ms / 181 ops/s | 3.86ms / 259 ops/s | 3.43ms / 291 ops/s | 3.90ms / 256 ops/s |
+| 列目录 (1000 文件) | 2.54ms / 394 ops/s | 8.04ms / 124 ops/s | 5.94ms / 168 ops/s | 4.06ms / 246 ops/s | 3.94ms / 254 ops/s | 5.97ms / 167 ops/s |
+| 列嵌套目录 (100 子目录) | 2.17ms / 460 ops/s | 5.46ms / 183 ops/s | 4.04ms / 247 ops/s | 3.90ms / 256 ops/s | 3.55ms / 282 ops/s | 3.56ms / 281 ops/s |
+| 删除 | 2.42ms / 413 ops/s | 4.55ms / 220 ops/s | 5.33ms / 188 ops/s | 3.59ms / 278 ops/s | 3.52ms / 284 ops/s | 3.73ms / 268 ops/s |
 
 ### 关键发现
 
 - **SQLite** 全场景最快（无网络开销）
-- **MySQL 5.7 vs 8.0**：5.7 在读写上更快；8.0 在目录列表上快 60%（查询优化器改进）
-- **PG 9.6 vs 16**：PG 16 全面提升 7-24%，大文件读取改善最明显（23.7%）
+- **MySQL 5.7 vs 8.0**：5.7 在读写上更快；8.0 在目录列表上快约 50%（查询优化器改进）
+- **PG 9.6 vs 16**：PG 16 在大文件读取上快约 30%；其他操作接近
 - **PostgreSQL** 小文件写入性能优秀，但大文件读取较慢（TOAST 开销）
-- **Oracle** 延迟稳定一致，偶有 P99 尖刺
-- 所有数据库都能良好支持目标场景（3 万小文件）——即使最慢的写入（MySQL 8.0 大文件 37 ops/s）也能在约 13 分钟内写完 3 万文件
+- **Oracle** 延迟稳定一致
+- 所有数据库都能良好支持目标场景（3 万小文件）——即使最慢的写入（MySQL 8.0 大文件 36 ops/s）也能在约 14 分钟内写完 3 万文件
 
 ## 开发环境
 
