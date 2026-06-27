@@ -202,6 +202,163 @@ class TestDjangoFileSystem(TestCase):
         assert result[0]["name"] == "/dir/sub"
 
 
+class TestDjangoFileSystemExtendedAPI(TestCase):
+    """Test extended fsspec API methods."""
+
+    def setUp(self):
+        self.fs = DjangoFileSystem(namespace=0)
+
+    def test_rm_file(self):
+        write_file(0, "/rmfile.txt", b"data")
+        self.fs.rm_file("/rmfile.txt")
+        assert not self.fs.exists("/rmfile.txt")
+
+    def test_rm_file_not_found(self):
+        with pytest.raises(FileNotFoundError):
+            self.fs.rm_file("/nonexistent.txt")
+
+    def test_internal_rm(self):
+        write_file(0, "/rm_internal.txt", b"data")
+        self.fs._rm("/rm_internal.txt")
+        assert not self.fs.exists("/rm_internal.txt")
+
+    def test_touch_create(self):
+        self.fs.touch("/touched.txt")
+        assert self.fs.exists("/touched.txt")
+        assert self.fs.cat("/touched.txt") == b""
+
+    def test_touch_truncate(self):
+        write_file(0, "/touch_trunc.txt", b"existing data")
+        self.fs.touch("/touch_trunc.txt", truncate=True)
+        assert self.fs.cat("/touch_trunc.txt") == b""
+
+    def test_touch_no_truncate_existing(self):
+        write_file(0, "/touch_keep.txt", b"keep me")
+        self.fs.touch("/touch_keep.txt", truncate=False)
+        assert self.fs.cat("/touch_keep.txt") == b"keep me"
+
+    def test_touch_no_truncate_new(self):
+        self.fs.touch("/touch_new.txt", truncate=False)
+        assert self.fs.exists("/touch_new.txt")
+
+    def test_checksum_returns_sha256(self):
+        write_file(0, "/chk.txt", b"hello")
+        import hashlib
+        expected = hashlib.sha256(b"hello").hexdigest()
+        assert self.fs.checksum("/chk.txt") == expected
+
+    def test_checksum_directory(self):
+        write_file(0, "/dir/file.txt", b"data")
+        result = self.fs.checksum("/dir")
+        assert result == ""  # directories have no checksum
+
+    def test_ukey_includes_version(self):
+        write_file(0, "/ukey.txt", b"v1")
+        key1 = self.fs.ukey("/ukey.txt")
+        write_file(0, "/ukey.txt", b"v2")
+        key2 = self.fs.ukey("/ukey.txt")
+        assert key1 != key2  # version changed
+
+    def test_ukey_stable_for_same_version(self):
+        write_file(0, "/ukey_stable.txt", b"data")
+        assert self.fs.ukey("/ukey_stable.txt") == self.fs.ukey("/ukey_stable.txt")
+
+    def test_sign_not_supported(self):
+        write_file(0, "/sign.txt", b"data")
+        with pytest.raises(NotImplementedError, match="not supported"):
+            self.fs.sign("/sign.txt")
+
+    def test_find_flat(self):
+        write_file(0, "/find/a.txt", b"a")
+        write_file(0, "/find/b.txt", b"b")
+        result = self.fs.find("/find")
+        assert sorted(result) == ["/find/a.txt", "/find/b.txt"]
+
+    def test_find_nested(self):
+        write_file(0, "/find2/a.txt", b"a")
+        write_file(0, "/find2/sub/b.txt", b"b")
+        write_file(0, "/find2/sub/deep/c.txt", b"c")
+        result = self.fs.find("/find2")
+        assert sorted(result) == ["/find2/a.txt", "/find2/sub/b.txt", "/find2/sub/deep/c.txt"]
+
+    def test_find_maxdepth(self):
+        write_file(0, "/findmd/a.txt", b"a")
+        write_file(0, "/findmd/sub/b.txt", b"b")
+        write_file(0, "/findmd/sub/deep/c.txt", b"c")
+        # maxdepth=1: direct children only
+        result = self.fs.find("/findmd", maxdepth=1)
+        assert sorted(result) == ["/findmd/a.txt"]
+        # maxdepth=2: one level of nesting
+        result = self.fs.find("/findmd", maxdepth=2)
+        assert sorted(result) == ["/findmd/a.txt", "/findmd/sub/b.txt"]
+
+    def test_find_detail(self):
+        write_file(0, "/findd/test.txt", b"hello")
+        result = self.fs.find("/findd", detail=True)
+        assert "/findd/test.txt" in result
+        assert result["/findd/test.txt"]["size"] == 5
+        assert result["/findd/test.txt"]["type"] == "file"
+
+    def test_find_withdirs(self):
+        write_file(0, "/findwd/sub/file.txt", b"data")
+        result = self.fs.find("/findwd", withdirs=True)
+        assert "/findwd/sub" in result
+        assert "/findwd/sub/file.txt" in result
+
+    def test_find_root(self):
+        write_file(0, "/root_find.txt", b"data")
+        result = self.fs.find("/")
+        assert "/root_find.txt" in result
+
+    def test_size(self):
+        write_file(0, "/sized.txt", b"12345")
+        assert self.fs.size("/sized.txt") == 5
+
+    def test_isfile(self):
+        write_file(0, "/isf.txt", b"data")
+        assert self.fs.isfile("/isf.txt")
+        assert not self.fs.isfile("/nonexistent")
+
+    def test_isdir(self):
+        write_file(0, "/isd/file.txt", b"data")
+        assert self.fs.isdir("/isd")
+        assert not self.fs.isdir("/isd/file.txt")
+
+    def test_head(self):
+        write_file(0, "/head.txt", b"hello world")
+        assert self.fs.head("/head.txt", size=5) == b"hello"
+
+    def test_tail(self):
+        write_file(0, "/tail.txt", b"hello world")
+        assert self.fs.tail("/tail.txt", size=5) == b"world"
+
+    def test_read_text(self):
+        write_file(0, "/text.txt", b"hello")
+        assert self.fs.read_text("/text.txt") == "hello"
+
+    def test_write_text(self):
+        self.fs.write_text("/wtext.txt", "hello")
+        assert self.fs.cat("/wtext.txt") == b"hello"
+
+    def test_pipe_and_cat(self):
+        self.fs.pipe_file("/pipe.txt", b"piped")
+        assert self.fs.cat_file("/pipe.txt") == b"piped"
+
+    def test_walk(self):
+        write_file(0, "/walk/a.txt", b"a")
+        write_file(0, "/walk/sub/b.txt", b"b")
+        walked = list(self.fs.walk("/walk"))
+        # walk returns (dirpath, dirnames, filenames)
+        assert len(walked) >= 1
+
+    def test_glob(self):
+        write_file(0, "/glob/foo.txt", b"foo")
+        write_file(0, "/glob/bar.py", b"bar")
+        result = self.fs.glob("/glob/*.txt")
+        assert "/glob/foo.txt" in result
+        assert "/glob/bar.py" not in result
+
+
 class TestDjangoFileSystemFsspec(TestCase):
     """Test fsspec.filesystem() registration."""
 
@@ -303,3 +460,10 @@ class TestDjangoTransaction(TestCase):
         """Without transaction, each operation commits immediately."""
         self.fs.pipe("/tx/auto.txt", b"auto")
         assert self.fs.exists("/tx/auto.txt")
+
+    def test_nested_transaction_raises(self):
+        """Nested transactions should raise RuntimeError."""
+        with self.fs.transaction:
+            with pytest.raises(RuntimeError, match="Nested"):
+                with self.fs.transaction:
+                    pass

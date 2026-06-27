@@ -11,28 +11,25 @@ class DjangoTransaction(Transaction):
 
     Wraps all file operations in a Django transaction.atomic() savepoint.
     On commit, the savepoint is released. On discard, it is rolled back.
+
+    Nested transactions are not supported — attempting to start a transaction
+    while one is active raises RuntimeError.
     """
 
     def start(self):
+        if self.fs._intrans:
+            raise RuntimeError("Nested transactions are not supported")
         self.files = []
         self.fs._intrans = True
-        self._atomic = db_transaction.atomic()
-        self._atomic.__enter__()
+        self._sid = db_transaction.savepoint()
 
     def complete(self, commit=True):
         try:
-            if not commit:
-                # Roll back the savepoint by raising an exception
-                db_transaction.set_rollback(True)
+            if commit:
+                db_transaction.savepoint_commit(self._sid)
+            else:
+                db_transaction.savepoint_rollback(self._sid)
         finally:
-            try:
-                self._atomic.__exit__(
-                    None if commit else RuntimeError,
-                    None if commit else RuntimeError("Transaction discarded"),
-                    None,
-                )
-            except RuntimeError:
-                pass  # Expected when discarding
             self.fs._intrans = False
             self.fs._transaction = None
             self.fs = None
@@ -110,20 +107,24 @@ class DjangoFileSystem(AbstractFileSystem):
         )
 
     def mkdir(self, path, create_parents=True, **kwargs):
-        # Directories are implicit, no-op
         pass
 
     def makedirs(self, path, exist_ok=False):
-        # Directories are implicit, no-op
         pass
 
     def rmdir(self, path):
-        # Directories are implicit, no-op
         pass
+
+    def _rm(self, path):
+        path = self._strip_protocol(path)
+        operations.delete_file(self.namespace, path, recursive=False)
 
     def rm(self, path, recursive=False, maxdepth=None):
         path = self._strip_protocol(path)
         operations.delete_file(self.namespace, path, recursive=recursive)
+
+    def rm_file(self, path):
+        self._rm(path)
 
     def cp_file(self, path1, path2, **kwargs):
         path1 = self._strip_protocol(path1)
@@ -134,6 +135,79 @@ class DjangoFileSystem(AbstractFileSystem):
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
         operations.move_file(self.namespace, path1, path2)
+
+    def touch(self, path, truncate=True, **kwargs):
+        path = self._strip_protocol(path)
+        if truncate or not self.exists(path):
+            with self.open(path, "wb") as f:
+                pass
+        # truncate=False on existing file: no-op (update timestamp not supported)
+
+    def checksum(self, path):
+        """Return the stored SHA-256 checksum of the file."""
+        info = self.info(path)
+        return info.get("checksum", "")
+
+    def ukey(self, path):
+        """Return a unique key for the current version of the file."""
+        info = self.info(path)
+        return f"{info.get('checksum', '')}:{info.get('version', '')}"
+
+    def sign(self, path, expiration=100, **kwargs):
+        raise NotImplementedError(
+            "Signing URLs is not supported by DjangoFileSystem"
+        )
+
+    def find(self, path, maxdepth=None, withdirs=False, detail=False, **kwargs):
+        """List all files under path, using database prefix query."""
+        path = self._strip_protocol(path)
+        if not path or path == "/":
+            prefix = "/"
+        else:
+            prefix = path.rstrip("/") + "/"
+
+        from .models import FileNode
+
+        nodes = FileNode.objects.filter(
+            namespace=self.namespace,
+            path__startswith=prefix,
+        )
+        if maxdepth is not None:
+            # Filter by depth: count slashes in relative path
+            # maxdepth=1 → only direct children (0 slashes in relative)
+            # maxdepth=2 → up to one nested level (0 or 1 slashes)
+            nodes = [
+                n for n in nodes
+                if n.path[len(prefix):].count("/") < maxdepth
+            ]
+        else:
+            nodes = list(nodes)
+
+        results = {}
+        for node in nodes:
+            entry = {
+                "name": node.path,
+                "size": node.size,
+                "type": "file",
+            }
+            results[node.path] = entry
+
+        if withdirs:
+            # Collect implicit directories
+            dirs = set()
+            for node_path in results:
+                relative = node_path[len(prefix):]
+                parts = relative.split("/")
+                for i in range(len(parts) - 1):
+                    dir_path = prefix + "/".join(parts[:i + 1])
+                    dirs.add(dir_path)
+            for d in dirs:
+                if d not in results:
+                    results[d] = {"name": d, "size": 0, "type": "directory"}
+
+        if detail:
+            return results
+        return sorted(results.keys())
 
     def created(self, path):
         info = self.info(path)
