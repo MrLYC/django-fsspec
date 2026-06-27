@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "django-fsspec"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A Django app that provides a file system interface via fsspec, backed by Django ORM"
 readme = "README.md"
 license = "MIT"
@@ -23,6 +23,13 @@ dev = [
 
 [project.entry-points."fsspec.specs"]
 django = "django_fsspec.fs:DjangoFileSystem"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0.dev0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "django_fsspec/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["django_fsspec"]
