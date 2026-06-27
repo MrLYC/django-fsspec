@@ -44,20 +44,25 @@ def _allocate_blocks(chunks: list[bytes]) -> list[StorageBlock]:
                 )[:acquired_count]
             )
 
-    # Create new blocks for any shortfall
-    shortfall = need - len(acquired_blocks)
-    if shortfall > 0:
-        new_blocks = StorageBlock.objects.bulk_create(
-            [StorageBlock(data=b"", size=0, is_free=False) for _ in range(shortfall)]
-        )
-        acquired_blocks.extend(new_blocks)
-
-    # Write data into blocks
+    # Write data into acquired (reused) blocks
     for block, chunk in zip(acquired_blocks, chunks):
         block.data = chunk
         block.size = len(chunk)
         block.checksum = _compute_checksum(chunk)
         block.save(update_fields=["data", "size", "checksum"])
+
+    # Create new blocks for any shortfall (with data inline to avoid PK issues)
+    shortfall = need - len(acquired_blocks)
+    if shortfall > 0:
+        remaining_chunks = chunks[len(acquired_blocks):]
+        for chunk in remaining_chunks:
+            block = StorageBlock.objects.create(
+                data=chunk,
+                size=len(chunk),
+                checksum=_compute_checksum(chunk),
+                is_free=False,
+            )
+            acquired_blocks.append(block)
 
     return acquired_blocks
 

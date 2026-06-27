@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: fsspec_test
+      MYSQL_DATABASE: fsspec_test
+      MYSQL_USER: fsspec
+      MYSQL_PASSWORD: fsspec_test
+    ports:
+      - "13306:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pfsspec_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fsspec_test
+      POSTGRES_USER: fsspec
+      POSTGRES_PASSWORD: fsspec_test
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fsspec -d fsspec_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
