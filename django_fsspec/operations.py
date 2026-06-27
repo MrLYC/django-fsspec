@@ -187,16 +187,86 @@ def create_file_exclusive(
 def append_file(
     namespace: int, path: str, data: bytes, content_type: str = ""
 ) -> FileNode:
-    """Append data to an existing file, or create it if it doesn't exist."""
+    """Append data to an existing file, or create it if it doesn't exist.
+
+    The read and write are wrapped in a single transaction with optimistic
+    locking, so concurrent appends will raise FileConflictError rather than
+    silently losing data.
+    """
     path = validate_path(path)
+    max_file_size = get_max_file_size()
+    block_size = get_block_size()
 
-    try:
-        existing_data = read_file(namespace, path)
-    except FileNotFoundError:
-        existing_data = b""
+    with transaction.atomic():
+        try:
+            file_node = FileNode.objects.get(namespace=namespace, path=path)
+        except FileNode.DoesNotExist:
+            file_node = None
 
-    new_data = existing_data + data
-    return write_file(namespace, path, new_data, content_type)
+        if file_node is not None:
+            # Read existing data within the transaction
+            file_blocks = (
+                FileBlock.objects.filter(file=file_node)
+                .select_related("block")
+                .order_by("sequence")
+            )
+            existing_data = b"".join(fb.block.data for fb in file_blocks)
+            new_data = existing_data + data
+
+            if len(new_data) > max_file_size:
+                raise FileTooLargeError(
+                    f"File size {len(new_data)} exceeds maximum {max_file_size}"
+                )
+
+            old_version = file_node.version
+            _release_blocks(file_node)
+
+            chunks = _chunk_data(new_data, block_size)
+            file_checksum = _compute_checksum(new_data)
+
+            updated = FileNode.objects.filter(
+                pk=file_node.pk, version=old_version
+            ).update(
+                size=len(new_data),
+                block_size=block_size,
+                checksum=file_checksum,
+                content_type=content_type if content_type else file_node.content_type,
+                version=old_version + 1,
+            )
+            if updated == 0:
+                raise FileConflictError(
+                    f"File was modified by another process: {path}"
+                )
+            file_node.refresh_from_db()
+        else:
+            # Create new file
+            new_data = data
+            if len(new_data) > max_file_size:
+                raise FileTooLargeError(
+                    f"File size {len(new_data)} exceeds maximum {max_file_size}"
+                )
+
+            chunks = _chunk_data(new_data, block_size)
+            file_checksum = _compute_checksum(new_data)
+
+            file_node = FileNode.objects.create(
+                namespace=namespace,
+                path=path,
+                size=len(new_data),
+                block_size=block_size,
+                checksum=file_checksum,
+                content_type=content_type,
+            )
+
+        blocks = _allocate_blocks(chunks)
+        FileBlock.objects.bulk_create(
+            [
+                FileBlock(file=file_node, block=block, sequence=i)
+                for i, block in enumerate(blocks)
+            ]
+        )
+
+    return file_node
 
 
 def read_file(namespace: int, path: str, verify_checksum: bool = False) -> bytes:

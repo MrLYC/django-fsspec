@@ -60,6 +60,62 @@ from django_fsspec.operations import read_file
 data = read_file(namespace=0, path="/test.txt", verify_checksum=True)
 ```
 
+## 事务
+
+使用 `fs.transaction` 将多个操作批量原子化：
+
+```python
+# 两个文件一起提交，或一起回滚
+with fs.transaction:
+    fs.pipe("/config/a.json", b'{"key": "value"}')
+    fs.pipe("/config/b.json", b'{"other": "data"}')
+
+# 异常触发回滚——不会有部分写入
+try:
+    with fs.transaction:
+        fs.pipe("/tmp/will_rollback.txt", b"data")
+        raise ValueError("oops")
+except ValueError:
+    pass
+# /tmp/will_rollback.txt 不存在
+```
+
+也可以和 Django 的 `transaction.atomic()` 配合：
+
+```python
+from django.db import transaction
+
+with transaction.atomic():
+    MyModel.objects.create(name="test")
+    fs.pipe("/related.txt", b"data")
+    # Model 和文件一起提交或回滚
+```
+
+### 事务注意事项
+
+**`fs.transaction` 外的操作不受事务保护。** 每个 `pipe`、`rm`、`mv` 独立提交。第二个操作失败时，第一个已经持久化：
+
+```python
+# 不是原子的——b.txt 失败时 a.txt 已写入
+fs.pipe("/a.txt", b"aaa")
+fs.pipe("/b.txt", b"bbb")
+
+# 原子的——使用 fs.transaction 或 Django transaction.atomic()
+with fs.transaction:
+    fs.pipe("/a.txt", b"aaa")
+    fs.pipe("/b.txt", b"bbb")
+```
+
+**`DjangoFile` 的 `commit()` 和 `discard()` 是空操作。** 事务回滚依赖数据库（Django 的 `atomic()`），不依赖 fsspec 的文件级 commit/discard 模式。
+
+**事务隔离级别取决于数据库。** 在 `fs.transaction` 内，读操作（`ls`、`cat`、`exists`）是否能看到其他连接的并发写入，取决于数据库的隔离级别：
+
+| 数据库 | 默认隔离级别 | `fs.transaction` 内的行为 |
+|--------|------------|-------------------------|
+| PostgreSQL | READ COMMITTED | 每条查询看到最新已提交的数据 |
+| MySQL | REPEATABLE READ | 查询看到事务开始时的快照 |
+| SQLite | SERIALIZABLE | 完全隔离（单写者） |
+
 ## 线程安全
 
 每次 `fs.open()` 返回独立的 `DjangoFile` 实例，可安全在多线程中使用。

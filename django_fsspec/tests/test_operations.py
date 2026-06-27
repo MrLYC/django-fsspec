@@ -109,6 +109,45 @@ class TestAppendFile(TestCase):
         append_file(0, "/new.txt", b"data")
         assert read_file(0, "/new.txt") == b"data"
 
+    def test_append_increments_version(self):
+        write_file(0, "/ver.txt", b"v1")
+        append_file(0, "/ver.txt", b"+v2")
+        node = FileNode.objects.get(path="/ver.txt")
+        assert node.version == 2
+
+    def test_append_preserves_content_type(self):
+        write_file(0, "/typed.txt", b"start", content_type="text/plain")
+        append_file(0, "/typed.txt", b"+more")
+        node = FileNode.objects.get(path="/typed.txt")
+        assert node.content_type == "text/plain"
+
+    @override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=20)
+    def test_append_too_large(self):
+        write_file(0, "/big.txt", b"x" * 15)
+        with pytest.raises(FileTooLargeError):
+            append_file(0, "/big.txt", b"y" * 10)
+        # Original data should be intact (transaction rolled back)
+        assert read_file(0, "/big.txt") == b"x" * 15
+
+    def test_append_conflict(self):
+        """Simulate optimistic lock conflict during append."""
+        from unittest.mock import patch
+
+        write_file(0, "/conflict.txt", b"original")
+
+        real_get = FileNode.objects.get
+
+        def stale_get(**kwargs):
+            obj = real_get(**kwargs)
+            if kwargs.get("path") == "/conflict.txt" or \
+               (kwargs.get("namespace") == 0 and hasattr(obj, 'path') and obj.path == "/conflict.txt"):
+                FileNode.objects.filter(pk=obj.pk).update(version=999)
+            return obj
+
+        with patch.object(FileNode.objects, "get", side_effect=stale_get):
+            with pytest.raises(FileConflictError):
+                append_file(0, "/conflict.txt", b"+appended")
+
 
 class TestReadFile(TestCase):
     def test_read_simple(self):
