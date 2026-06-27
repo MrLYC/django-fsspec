@@ -1,7 +1,7 @@
-from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
+from fsspec.spec import AbstractFileSystem
 
 from . import operations
-from .models import get_block_size
+from .buffer import DjangoFile
 
 
 class DjangoFileSystem(AbstractFileSystem):
@@ -100,70 +100,3 @@ class DjangoFileSystem(AbstractFileSystem):
     def modified(self, path):
         info = self.info(path)
         return info.get("updated")
-
-
-class DjangoFile(AbstractBufferedFile):
-    """A file object backed by Django ORM storage blocks."""
-
-    def __init__(self, fs, path, mode="rb", block_size=None, autocommit=True,
-                 cache_options=None, **kwargs):
-        if mode not in ("rb", "wb", "ab", "xb"):
-            raise ValueError(f"Unsupported mode: {mode!r}. Use 'rb', 'wb', 'ab', or 'xb'.")
-
-        # For read mode, get file size
-        size = None
-        if "r" in mode:
-            try:
-                info = operations.get_file_info(fs.namespace, path)
-                size = info["size"]
-            except FileNotFoundError:
-                raise FileNotFoundError(f"File not found: {path}")
-
-        # For exclusive create, check existence early
-        if mode == "xb":
-            if operations.file_exists(fs.namespace, path):
-                raise FileExistsError(f"File already exists: {path}")
-
-        # For append, read existing data
-        self._append_data = b""
-        if mode == "ab":
-            try:
-                self._append_data = operations.read_file(fs.namespace, path)
-            except FileNotFoundError:
-                pass
-
-        if block_size is None:
-            block_size = get_block_size()
-
-        super().__init__(
-            fs, path, mode=mode, block_size=block_size,
-            autocommit=autocommit, cache_options=cache_options,
-            size=size, **kwargs
-        )
-
-    def _fetch_range(self, start, end):
-        """Read bytes [start, end) from the file."""
-        return operations.read_file_range(self.fs.namespace, self.path, start, end)
-
-    def _initiate_upload(self):
-        """Prepare for upload. Called once before _upload_chunk."""
-        self._upload_buffer = self._append_data
-
-    def _upload_chunk(self, final=False):
-        """Buffer data; on final=True, write everything to the database."""
-        if self.buffer is not None:
-            self._upload_buffer += self.buffer.getvalue()
-            self.buffer.seek(0)
-            self.buffer.truncate()
-
-        if final:
-            if self.mode == "xb":
-                operations.create_file_exclusive(
-                    self.fs.namespace, self.path, self._upload_buffer
-                )
-            else:
-                operations.write_file(
-                    self.fs.namespace, self.path, self._upload_buffer
-                )
-            self._upload_buffer = b""
-        return True

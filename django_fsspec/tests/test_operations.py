@@ -3,7 +3,7 @@ import hashlib
 import pytest
 from django.test import TestCase, override_settings
 
-from django_fsspec.exceptions import FileTooLargeError, PathValidationError
+from django_fsspec.exceptions import FileConflictError, FileTooLargeError, PathValidationError
 from django_fsspec.models import FileBlock, FileNode, StorageBlock
 from django_fsspec.operations import (
     append_file,
@@ -320,3 +320,106 @@ class TestBlockPoolReuse(TestCase):
         write_file(0, "/new.txt", b"new data")
         # Free block should have been reused
         assert StorageBlock.objects.filter(is_free=True).count() == 0
+
+
+class TestOptimisticLocking(TestCase):
+    def test_version_increments_on_overwrite(self):
+        write_file(0, "/test.txt", b"v1")
+        node = FileNode.objects.get(namespace=0, path="/test.txt")
+        assert node.version == 1
+
+        write_file(0, "/test.txt", b"v2")
+        node.refresh_from_db()
+        assert node.version == 2
+
+    def test_conflict_raises_error(self):
+        """Simulate optimistic lock conflict by patching the version read."""
+        from unittest.mock import patch
+
+        write_file(0, "/test.txt", b"original")
+        node = FileNode.objects.get(namespace=0, path="/test.txt")
+        assert node.version == 1
+
+        # Patch get() to return a stale version, simulating a race condition
+        real_get = FileNode.objects.get
+
+        def stale_get(**kwargs):
+            obj = real_get(**kwargs)
+            # Simulate another process having updated the version
+            FileNode.objects.filter(pk=obj.pk).update(version=99)
+            return obj
+
+        with patch.object(FileNode.objects, "get", side_effect=stale_get):
+            with pytest.raises(FileConflictError, match="modified by another process"):
+                write_file(0, "/test.txt", b"conflict")
+
+    def test_create_new_file_no_conflict(self):
+        """Creating a new file should not involve optimistic lock."""
+        node = write_file(0, "/new.txt", b"data")
+        assert node.version == 1
+
+
+class TestVerifyChecksum(TestCase):
+    def test_read_with_verify_passes(self):
+        write_file(0, "/test.txt", b"hello")
+        data = read_file(0, "/test.txt", verify_checksum=True)
+        assert data == b"hello"
+
+    def test_read_without_verify_skips(self):
+        write_file(0, "/test.txt", b"hello")
+        # Corrupt block checksum
+        block = StorageBlock.objects.filter(is_free=False).first()
+        block.checksum = "bad"
+        block.save(update_fields=["checksum"])
+        # Should not raise without verify
+        data = read_file(0, "/test.txt", verify_checksum=False)
+        assert data == b"hello"
+
+    def test_read_with_verify_detects_block_corruption(self):
+        write_file(0, "/test.txt", b"hello")
+        block = StorageBlock.objects.filter(is_free=False).first()
+        block.checksum = "bad_checksum"
+        block.save(update_fields=["checksum"])
+        with pytest.raises(ValueError, match="Block.*checksum mismatch"):
+            read_file(0, "/test.txt", verify_checksum=True)
+
+    def test_read_with_verify_detects_file_corruption(self):
+        write_file(0, "/test.txt", b"hello")
+        node = FileNode.objects.get(path="/test.txt")
+        node.checksum = "bad_file_checksum"
+        node.save(update_fields=["checksum"])
+        with pytest.raises(ValueError, match="File.*checksum mismatch"):
+            read_file(0, "/test.txt", verify_checksum=True)
+
+
+class TestBlockSizeCoexistence(TestCase):
+    def test_different_block_sizes_coexist(self):
+        """Files written with different block sizes can coexist and be read."""
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(0, "/small_blocks.txt", b"A" * 250)
+
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=256 * 1024):
+            write_file(0, "/large_blocks.txt", b"B" * 250)
+
+        # Both should be readable
+        assert read_file(0, "/small_blocks.txt") == b"A" * 250
+        assert read_file(0, "/large_blocks.txt") == b"B" * 250
+
+        # Check they have different block sizes
+        small = FileNode.objects.get(path="/small_blocks.txt")
+        large = FileNode.objects.get(path="/large_blocks.txt")
+        assert small.block_size == 100
+        assert large.block_size == 256 * 1024
+
+        # Small file should have multiple blocks, large file should have one
+        assert FileBlock.objects.filter(file=small).count() == 3
+        assert FileBlock.objects.filter(file=large).count() == 1
+
+    def test_range_read_with_custom_block_size(self):
+        """Range read should work correctly with non-default block size."""
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=10):
+            data = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            write_file(0, "/alpha.txt", data)
+
+        # Read across block boundary
+        assert read_file_range(0, "/alpha.txt", 8, 15) == b"IJKLMNO"

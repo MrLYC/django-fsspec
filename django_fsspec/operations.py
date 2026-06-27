@@ -1,5 +1,4 @@
 import hashlib
-import math
 
 from django.db import transaction
 from django.db.models import Case, F, Value, When
@@ -8,8 +7,6 @@ from django.db.models.functions import StrIndex, Substr
 from .exceptions import FileConflictError, FileTooLargeError
 from .models import FileBlock, FileNode, StorageBlock, get_block_size, get_max_file_size
 from .validators import validate_path
-
-MAX_BLOCK_RETRY = 3
 
 
 def _compute_checksum(data: bytes) -> str:
@@ -78,7 +75,11 @@ def _release_blocks(file_node: FileNode):
 def write_file(
     namespace: int, path: str, data: bytes, content_type: str = ""
 ) -> FileNode:
-    """Write data to a file path. Creates or overwrites the file."""
+    """Write data to a file path. Creates or overwrites the file.
+
+    Uses optimistic locking via the version field. If another process modified
+    the file between read and write, raises FileConflictError.
+    """
     path = validate_path(path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
@@ -91,36 +92,39 @@ def write_file(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
-        file_node, created = FileNode.objects.select_for_update().get_or_create(
-            namespace=namespace,
-            path=path,
-            defaults={
-                "size": len(data),
-                "block_size": block_size,
-                "checksum": file_checksum,
-                "content_type": content_type,
-            },
-        )
+        try:
+            file_node = FileNode.objects.get(namespace=namespace, path=path)
+        except FileNode.DoesNotExist:
+            file_node = None
 
-        if not created:
+        if file_node is not None:
+            old_version = file_node.version
             _release_blocks(file_node)
-            file_node.size = len(data)
-            file_node.block_size = block_size
-            file_node.checksum = file_checksum
-            if content_type:
-                file_node.content_type = content_type
-            file_node.version = F("version") + 1
-            file_node.save(
-                update_fields=[
-                    "size",
-                    "block_size",
-                    "checksum",
-                    "content_type",
-                    "version",
-                    "updated_at",
-                ]
+
+            # Optimistic lock: UPDATE ... WHERE version = old_version
+            updated = FileNode.objects.filter(
+                pk=file_node.pk, version=old_version
+            ).update(
+                size=len(data),
+                block_size=block_size,
+                checksum=file_checksum,
+                content_type=content_type if content_type else file_node.content_type,
+                version=old_version + 1,
             )
+            if updated == 0:
+                raise FileConflictError(
+                    f"File was modified by another process: {path}"
+                )
             file_node.refresh_from_db()
+        else:
+            file_node = FileNode.objects.create(
+                namespace=namespace,
+                path=path,
+                size=len(data),
+                block_size=block_size,
+                checksum=file_checksum,
+                content_type=content_type,
+            )
 
         blocks = _allocate_blocks(chunks)
         FileBlock.objects.bulk_create(
@@ -144,14 +148,14 @@ def create_file_exclusive(
             f"File size {len(data)} exceeds maximum {max_file_size}"
         )
 
-    if FileNode.objects.filter(namespace=namespace, path=path).exists():
-        raise FileExistsError(f"File already exists: {path}")
-
     block_size = get_block_size()
     chunks = _chunk_data(data, block_size)
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
+        if FileNode.objects.filter(namespace=namespace, path=path).exists():
+            raise FileExistsError(f"File already exists: {path}")
+
         try:
             file_node = FileNode.objects.create(
                 namespace=namespace,
@@ -190,8 +194,15 @@ def append_file(
     return write_file(namespace, path, new_data, content_type)
 
 
-def read_file(namespace: int, path: str) -> bytes:
-    """Read entire file content."""
+def read_file(namespace: int, path: str, verify_checksum: bool = False) -> bytes:
+    """Read entire file content.
+
+    Parameters
+    ----------
+    verify_checksum : bool
+        If True, verify block and file checksums on read. Raises ValueError
+        on mismatch.
+    """
     path = validate_path(path)
 
     try:
@@ -205,7 +216,29 @@ def read_file(namespace: int, path: str) -> bytes:
         .order_by("sequence")
     )
 
-    return b"".join(fb.block.data for fb in file_blocks)
+    parts = []
+    for fb in file_blocks:
+        block_data = bytes(fb.block.data)
+        if verify_checksum and fb.block.checksum:
+            actual = _compute_checksum(block_data)
+            if actual != fb.block.checksum:
+                raise ValueError(
+                    f"Block {fb.block.pk} checksum mismatch: "
+                    f"expected {fb.block.checksum}, got {actual}"
+                )
+        parts.append(block_data)
+
+    data = b"".join(parts)
+
+    if verify_checksum and file_node.checksum:
+        actual = _compute_checksum(data)
+        if actual != file_node.checksum:
+            raise ValueError(
+                f"File {path} checksum mismatch: "
+                f"expected {file_node.checksum}, got {actual}"
+            )
+
+    return data
 
 
 def read_file_range(namespace: int, path: str, start: int, end: int) -> bytes:

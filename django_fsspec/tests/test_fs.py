@@ -1,7 +1,8 @@
 import pytest
 from django.test import TestCase
 
-from django_fsspec.fs import DjangoFile, DjangoFileSystem
+from django_fsspec.buffer import DjangoFile
+from django_fsspec.fs import DjangoFileSystem
 from django_fsspec.operations import write_file
 
 
