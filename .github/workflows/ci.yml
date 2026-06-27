@@ -338,26 +338,29 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build twine
+
+      - name: Build package
+        run: python -m build
 
       - name: Verify tag matches version
         run: |
           TAG=${GITHUB_REF#refs/tags/v}
-          pip install -e .
-          VERSION=$(python -c "from importlib.metadata import version; print(version('django-fsspec'))")
+          VERSION=$(python -c "
+          import zipfile, glob
+          whl = glob.glob('dist/*.whl')[0]
+          # Extract version from wheel filename: name-version-...
+          version = whl.split('/')[-1].split('-')[1]
+          print(version)
+          ")
           echo "Tag: $TAG, Package version: $VERSION"
           if [ "$TAG" != "$VERSION" ]; then
             echo "ERROR: Tag v$TAG does not match package version $VERSION"
             exit 1
           fi
 
-      - name: Build package
-        run: python -m build
-
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          pip install twine
-          twine upload dist/*
+        run: twine upload dist/*
