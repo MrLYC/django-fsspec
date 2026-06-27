@@ -1,12 +1,49 @@
 # Architecture
 
-## Three-Table Design
+![django-fsspec architecture diagram](../assets/django-fsspec-architecture.png)
+
+`django-fsspec` implements an fsspec filesystem by translating file operations
+into Django ORM queries and transactions. The public API is fsspec-compatible;
+the storage backend is a small relational schema made of file metadata, reusable
+binary blocks, and file-to-block mappings.
+
+## Module Map
+
+| Module | Responsibility |
+|--------|----------------|
+| `fs.py` | `DjangoFileSystem` fsspec adapter, namespace isolation, directory/file API, and fsspec transaction integration |
+| `buffer.py` | `DjangoFile` bridge to `AbstractBufferedFile`, buffered uploads, append bootstrap, and range reads |
+| `operations.py` | Transactional file primitives: validate, chunk, allocate/release blocks, read, list, copy, move, and delete |
+| `models.py` | ORM schema and storage settings helpers |
+| `validators.py` | Path validation and Unicode NFC normalization |
+| `checks.py` | Django system/startup checks for block-size drift |
+| `migrations_ops.py` | `RechunkOperation` for rewriting existing files to a new block size |
+| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, and `fsspec_gc` |
+
+## Three-Table Model
 
 | Table | Purpose |
 |-------|---------|
-| `FileNode` | File metadata (path, size, checksum, version) |
-| `StorageBlock` | Storage chunks (binary data, size, checksum, free flag) |
-| `FileBlock` | File-to-block mapping (file ID, block ID, sequence) |
+| `FileNode` | Per-file metadata: `namespace`, `path`, `size`, `block_size`, checksum, content type, version, timestamps |
+| `StorageBlock` | Binary chunk storage: data, size, checksum, and `is_free` pool flag |
+| `FileBlock` | Ordered mapping from a file to storage blocks via `sequence` |
+
+`FileNode` is unique on `(namespace, path)`, so the same path can exist in
+different tenant namespaces. `FileBlock` is unique on `(file, sequence)` and
+ordered by `sequence`, which makes block reconstruction deterministic.
+
+## Request Path
+
+1. fsspec loads the `django` protocol entry point and instantiates
+   `DjangoFileSystem(namespace=...)`.
+2. `DjangoFileSystem` strips the protocol, applies namespace scope, and delegates
+   to `operations.py` for metadata, listing, copy, move, and delete operations.
+3. `open()` returns a `DjangoFile`, which uses fsspec's buffered-file contract.
+4. `DjangoFile` calls `operations.read_file_range()` for reads and
+   `operations.write_file()` or `operations.create_file_exclusive()` on final
+   upload.
+5. `operations.py` validates paths, computes checksums, chunks bytes, and writes
+   the ORM rows inside Django transactions.
 
 ## Implicit Directories
 
@@ -25,9 +62,45 @@ FileNode.objects.filter(path__startswith=prefix).annotate(
 
 The database returns only deduplicated next-level entries — O(children) not O(total files).
 
+`find()` uses the same prefix idea to fetch files below a path. When `maxdepth`
+is provided, it filters depth in Python after the prefix query; `ls()` keeps the
+next-child projection in the database.
+
+## Write Flow
+
+1. `open(path, "wb")`, `pipe()`, or `touch()` creates a `DjangoFile`.
+2. `DjangoFile` buffers bytes through `AbstractBufferedFile`; append mode first
+   reads the existing file into the upload buffer.
+3. On final upload, `operations.write_file()` validates the path, enforces
+   `DJANGO_FSSPEC_MAX_FILE_SIZE`, computes a SHA-256 file checksum, and splits
+   data by the current `DJANGO_FSSPEC_BLOCK_SIZE`.
+4. Inside `transaction.atomic()`, an existing file releases its old blocks to the
+   free pool and updates `FileNode` with an optimistic `version` predicate; a new
+   file creates a fresh `FileNode`.
+5. `_allocate_blocks()` claims free `StorageBlock` rows when possible, rewrites
+   their data/checksum, and creates new blocks for any shortfall.
+6. `FileBlock.bulk_create()` stores the ordered file-to-block mapping.
+
+Exclusive create mode (`"xb"`) routes through `create_file_exclusive()` and
+raises `FileExistsError` if the `(namespace, path)` already exists.
+
+## Read Flow
+
+1. `open(path, "rb")` resolves file metadata and file size.
+2. `read()` or `seek()` calls `DjangoFile._fetch_range(start, end)`.
+3. `operations.read_file_range()` uses the file's stored `block_size` to compute
+   `start_block` and `end_block`, selects only those `FileBlock` rows, joins the
+   related `StorageBlock` rows, and trims the concatenated bytes to the requested
+   range.
+4. `operations.read_file(..., verify_checksum=True)` can verify both block-level
+   and file-level SHA-256 checksums.
+
 ## Block Pool
 
-On delete/overwrite, old blocks are marked `is_free=True`. New writes reuse free blocks via batch `UPDATE`, falling back to `bulk_create` for shortfalls.
+On delete, overwrite, recursive directory removal, or rechunking, old blocks are
+marked `is_free=True` and their `FileBlock` mappings are removed. New writes try
+to reuse free blocks via a batch `UPDATE` predicate and fall back to creating new
+blocks when the pool is short or contended.
 
 ## Optimistic Locking
 
@@ -39,17 +112,30 @@ UPDATE file_node SET ... WHERE pk=X AND version=old_version
 
 If zero rows affected, another process modified the file — raises `FileConflictError`.
 
-## Write Flow
+## Transactions
 
-1. `open(path, "wb")` → creates `DjangoFile`
-2. `write(data)` → buffered by `AbstractBufferedFile`
-3. `close()` → single transaction: chunk → allocate blocks → create mappings → update FileNode
+`DjangoTransaction` maps fsspec transactions onto `django.db.transaction.atomic()`.
+In Django autocommit mode it opens a database transaction; inside an existing
+transaction it creates a savepoint. On discard, it marks the atomic block for
+rollback. Nested fsspec transactions are rejected with `RuntimeError`.
 
-## Read Flow
+## Block Size Changes
 
-1. `open(path, "rb")` → reads `FileNode.block_size`
-2. `read()`/`seek()` → triggers `_fetch_range(start, end)`
-3. Arithmetic block positioning: `start_block = start // block_size`
+Each `FileNode` stores the block size used when it was written, so files with
+different block sizes can coexist and range reads still work. Changing
+`DJANGO_FSSPEC_BLOCK_SIZE` only affects new writes. To rewrite existing files,
+add a migration with `RechunkOperation(new_block_size=...)`; the Django system
+check `django_fsspec.W001` warns when persisted files differ from the current
+setting.
+
+## Operational Tooling
+
+| Command / Hook | Purpose |
+|----------------|---------|
+| `fsspec_stats` | Reports namespace count, file count/size, used/free blocks, and mapping count |
+| `fsspec_fsck` | Verifies block checksums, block sizes, file checksums, file sizes, sequence continuity, and mappings to free blocks |
+| `fsspec_gc` | Deletes free `StorageBlock` rows, optionally keeping a reusable pool |
+| `check_block_size_consistency` | Emits a Django warning when stored block sizes differ from the configured block size |
 
 ## Performance Baseline
 

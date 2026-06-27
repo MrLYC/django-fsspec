@@ -1,12 +1,46 @@
 # 架构设计
 
-## 三表结构
+![django-fsspec 架构图](../assets/django-fsspec-architecture.png)
+
+`django-fsspec` 把 fsspec 文件系统接口转换为 Django ORM 查询和事务。对外暴露
+兼容 fsspec 的 `django://` 协议；底层使用一组关系型表保存文件元数据、可复用
+二进制块，以及文件到块的顺序映射。
+
+## 模块职责
+
+| 模块 | 职责 |
+|------|------|
+| `fs.py` | `DjangoFileSystem` fsspec 适配器、namespace 隔离、目录/文件 API、fsspec 事务集成 |
+| `buffer.py` | `DjangoFile` 与 `AbstractBufferedFile` 的桥接、缓冲上传、追加写初始化、范围读取 |
+| `operations.py` | 事务化文件原语：校验、切块、分配/释放块、读取、列目录、复制、移动、删除 |
+| `models.py` | ORM 表结构和存储配置 helper |
+| `validators.py` | 路径校验和 Unicode NFC 规范化 |
+| `checks.py` | block size 漂移的 Django system check 和启动检查 |
+| `migrations_ops.py` | `RechunkOperation`，用于把已有文件重切到新的 block size |
+| `management/commands/` | 运维命令：`fsspec_stats`、`fsspec_fsck`、`fsspec_gc` |
+
+## 三表模型
 
 | 表 | 作用 |
 |----|------|
-| `FileNode` | 文件元数据（路径、大小、checksum、版本） |
-| `StorageBlock` | 存储块（二进制数据、大小、checksum、是否空闲） |
-| `FileBlock` | 文件↔块映射（文件 ID、块 ID、序号） |
+| `FileNode` | 文件元数据：`namespace`、`path`、`size`、`block_size`、checksum、content type、version、时间戳 |
+| `StorageBlock` | 二进制块：data、size、checksum、`is_free` 块池标记 |
+| `FileBlock` | 文件到块的有序映射，通过 `sequence` 保持块顺序 |
+
+`FileNode` 对 `(namespace, path)` 做唯一约束，因此不同租户 namespace 可以保存
+相同路径。`FileBlock` 对 `(file, sequence)` 做唯一约束，并按 `sequence` 排序，
+保证文件重组顺序确定。
+
+## 请求路径
+
+1. fsspec 通过 `django` protocol entry point 实例化
+   `DjangoFileSystem(namespace=...)`。
+2. `DjangoFileSystem` 去掉协议前缀、套用 namespace，并把元数据、列目录、复制、
+   移动和删除委托给 `operations.py`。
+3. `open()` 返回 `DjangoFile`，由它实现 fsspec 的 buffered-file 合约。
+4. `DjangoFile` 读取时调用 `operations.read_file_range()`；最终上传时调用
+   `operations.write_file()` 或 `operations.create_file_exclusive()`。
+5. `operations.py` 校验路径、计算 checksum、切块，并在 Django 事务中写入 ORM 行。
 
 ## 隐式目录
 
@@ -25,9 +59,41 @@ FileNode.objects.filter(path__startswith=prefix).annotate(
 
 数据库只返回去重后的下一级名称，传输量 O(子项数) 而非 O(文件总数)。
 
+`find()` 也使用前缀查询获取路径下的文件。传入 `maxdepth` 时，它会在前缀查询后
+用 Python 过滤深度；`ls()` 的下一级目录/文件投影仍下推到数据库。
+
+## 写入流程
+
+1. `open(path, "wb")`、`pipe()` 或 `touch()` 创建 `DjangoFile`。
+2. `DjangoFile` 通过 `AbstractBufferedFile` 缓冲字节；追加写模式会先把已有内容
+   读入上传缓冲区。
+3. 最终上传时，`operations.write_file()` 校验路径、检查
+   `DJANGO_FSSPEC_MAX_FILE_SIZE`、计算 SHA-256 文件 checksum，并按当前
+   `DJANGO_FSSPEC_BLOCK_SIZE` 切块。
+4. 在 `transaction.atomic()` 内，已有文件会把旧块释放到空闲池，并带
+   `version` 条件更新 `FileNode`；新文件则创建新的 `FileNode`。
+5. `_allocate_blocks()` 优先通过批量 `UPDATE` 占用空闲 `StorageBlock`，重写
+   data/checksum；不足时创建新块。
+6. `FileBlock.bulk_create()` 写入有序的文件到块映射。
+
+独占创建模式（`"xb"`）走 `create_file_exclusive()`；如果 `(namespace, path)`
+已存在则抛出 `FileExistsError`。
+
+## 读取流程
+
+1. `open(path, "rb")` 解析文件元数据和文件大小。
+2. `read()` 或 `seek()` 调用 `DjangoFile._fetch_range(start, end)`。
+3. `operations.read_file_range()` 使用文件自身保存的 `block_size` 计算
+   `start_block` 和 `end_block`，只查询对应的 `FileBlock`，关联
+   `StorageBlock` 后拼接并裁剪到请求范围。
+4. `operations.read_file(..., verify_checksum=True)` 可以校验块级和文件级
+   SHA-256 checksum。
+
 ## 块池复用
 
-删除/覆盖文件时，旧块标记 `is_free=True`。新写入优先复用空闲块（批量 UPDATE），不够时 `bulk_create` 新块。
+删除、覆盖、递归删除目录或 rechunk 时，旧块会标记为 `is_free=True`，对应的
+`FileBlock` 映射会被删除。新写入优先用批量 `UPDATE` 抢占空闲块；空闲池不足
+或发生竞争时，再创建新的 `StorageBlock`。
 
 ## 乐观锁
 
@@ -39,17 +105,28 @@ UPDATE file_node SET ... WHERE pk=X AND version=old_version
 
 如果受影响行数为 0，说明被其他进程修改，抛出 `FileConflictError`。
 
-## 写入流程
+## 事务
 
-1. `open(path, "wb")` → 创建 DjangoFile
-2. `write(data)` → AbstractBufferedFile 内置缓冲
-3. `close()` → 单事务内：切块 → 分配块 → 创建映射 → 更新 FileNode
+`DjangoTransaction` 把 fsspec transaction 映射到 `django.db.transaction.atomic()`。
+Django autocommit 模式下会开启真实数据库事务；如果已经处在外层事务中，则创建
+savepoint。discard 时会标记 atomic block 回滚。嵌套 fsspec transaction 不支持，
+会抛出 `RuntimeError`。
 
-## 读取流程
+## Block Size 变更
 
-1. `open(path, "rb")` → 获取 FileNode.block_size
-2. `read()`/`seek()` → `_fetch_range(start, end)`
-3. 按 `block_size` 算术定位块序号，只查询需要的块
+每个 `FileNode` 都保存写入时使用的 block size，因此不同 block size 的文件可以
+共存，范围读取仍能正确工作。修改 `DJANGO_FSSPEC_BLOCK_SIZE` 只影响后续新写入。
+如果要重写已有文件，在 migration 中加入 `RechunkOperation(new_block_size=...)`；
+Django system check `django_fsspec.W001` 会在已保存文件和当前配置不一致时警告。
+
+## 运维工具
+
+| 命令 / Hook | 作用 |
+|-------------|------|
+| `fsspec_stats` | 输出 namespace 数、文件数量/大小、已用/空闲块、映射数量 |
+| `fsspec_fsck` | 校验块 checksum、块大小、文件 checksum、文件大小、序号连续性，以及指向空闲块的映射 |
+| `fsspec_gc` | 删除空闲 `StorageBlock`，可选择保留一定数量作为复用池 |
+| `check_block_size_consistency` | 当已存文件的 block size 和当前配置不一致时发出 Django warning |
 
 ## 性能基线
 
