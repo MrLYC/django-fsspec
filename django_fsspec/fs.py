@@ -9,11 +9,15 @@ from .buffer import DjangoFile
 class DjangoTransaction(Transaction):
     """Filesystem transaction backed by Django database transaction.
 
-    Wraps all file operations in a Django transaction.atomic() savepoint.
-    On commit, the savepoint is released. On discard, it is rolled back.
+    Uses Django's ``transaction.atomic()`` which works correctly in all modes:
+    - **autocommit mode** (default): opens a real database transaction
+    - **inside existing transaction**: creates a savepoint
 
-    Nested transactions are not supported — attempting to start a transaction
-    while one is active raises RuntimeError.
+    On commit, the atomic block exits normally (commit/savepoint release).
+    On discard, ``set_rollback(True)`` triggers rollback on exit.
+
+    Nested fsspec transactions are not supported — attempting to start a
+    transaction while one is active raises RuntimeError.
     """
 
     def start(self):
@@ -21,14 +25,14 @@ class DjangoTransaction(Transaction):
             raise RuntimeError("Nested transactions are not supported")
         self.files = []
         self.fs._intrans = True
-        self._sid = db_transaction.savepoint()
+        self._atomic = db_transaction.atomic()
+        self._atomic.__enter__()
 
     def complete(self, commit=True):
         try:
-            if commit:
-                db_transaction.savepoint_commit(self._sid)
-            else:
-                db_transaction.savepoint_rollback(self._sid)
+            if not commit:
+                db_transaction.set_rollback(True)
+            self._atomic.__exit__(None, None, None)
         finally:
             self.fs._intrans = False
             self.fs._transaction = None
