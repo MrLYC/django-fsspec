@@ -42,6 +42,7 @@ dev = [
     "pytest",
     "pytest-django",
     "pytest-cov",
+    "django-test-migrations",
 ]
 
 [project.entry-points."fsspec.specs"]
