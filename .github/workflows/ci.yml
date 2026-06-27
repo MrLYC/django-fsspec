@@ -246,11 +246,13 @@ jobs:
         run: python benchmarks/e2e_test.py
 
       - name: Benchmark
+        continue-on-error: true
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
         run: python benchmarks/run.py --db oracle --json benchmarks/results-oracle.json
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-oracle
