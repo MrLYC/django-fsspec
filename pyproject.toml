@@ -9,10 +9,33 @@ description = "A Django app that provides a file system interface via fsspec, ba
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
+keywords = ["django", "fsspec", "filesystem", "orm", "storage"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Framework :: Django :: 3.2",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: System :: Filesystems",
+]
 dependencies = [
     "django>=3.2",
     "fsspec",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MrLYC/django-fsspec"
+Repository = "https://github.com/MrLYC/django-fsspec"
+Documentation = "https://github.com/MrLYC/django-fsspec/tree/main/docs/en"
+Changelog = "https://github.com/MrLYC/django-fsspec/blob/main/CHANGELOG.md"
+Issues = "https://github.com/MrLYC/django-fsspec/issues"
 
 [project.optional-dependencies]
 dev = [
