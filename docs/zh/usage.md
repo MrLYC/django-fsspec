@@ -80,17 +80,6 @@ except ValueError:
 # /tmp/will_rollback.txt 不存在
 ```
 
-也可以和 Django 的 `transaction.atomic()` 配合：
-
-```python
-from django.db import transaction
-
-with transaction.atomic():
-    MyModel.objects.create(name="test")
-    fs.pipe("/related.txt", b"data")
-    # Model 和文件一起提交或回滚
-```
-
 ### 事务注意事项
 
 **`fs.transaction` 外的操作不受事务保护。** 每个 `pipe`、`rm`、`mv` 独立提交。第二个操作失败时，第一个已经持久化：
@@ -100,7 +89,7 @@ with transaction.atomic():
 fs.pipe("/a.txt", b"aaa")
 fs.pipe("/b.txt", b"bbb")
 
-# 原子的——使用 fs.transaction 或 Django transaction.atomic()
+# 原子的——使用 fs.transaction
 with fs.transaction:
     fs.pipe("/a.txt", b"aaa")
     fs.pipe("/b.txt", b"bbb")

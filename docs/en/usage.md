@@ -80,17 +80,6 @@ except ValueError:
 # /tmp/will_rollback.txt does not exist
 ```
 
-Works with Django's `transaction.atomic()` too:
-
-```python
-from django.db import transaction
-
-with transaction.atomic():
-    MyModel.objects.create(name="test")
-    fs.pipe("/related.txt", b"data")
-    # Both the model and the file are committed or rolled back together
-```
-
 ### Transaction Pitfalls
 
 **Operations outside `fs.transaction` are not grouped.** Each `pipe`, `rm`, `mv` etc. commits independently. If the second operation fails, the first is already persisted:
@@ -100,7 +89,7 @@ with transaction.atomic():
 fs.pipe("/a.txt", b"aaa")
 fs.pipe("/b.txt", b"bbb")
 
-# Atomic — use fs.transaction or Django's transaction.atomic()
+# Atomic — use fs.transaction
 with fs.transaction:
     fs.pipe("/a.txt", b"aaa")
     fs.pipe("/b.txt", b"bbb")
