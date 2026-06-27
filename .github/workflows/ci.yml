@@ -89,6 +89,7 @@ jobs:
     needs: unit-test
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - mysql-version: "5.7"
@@ -119,6 +120,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Configure MySQL charset
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -pfsspec_test -e "
+            ALTER DATABASE fsspec_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          "
+
       - name: Install dependencies
         run: |
           pip install -e ".[dev]"
@@ -147,6 +154,7 @@ jobs:
     needs: unit-test
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - pg-version: "9.6"
