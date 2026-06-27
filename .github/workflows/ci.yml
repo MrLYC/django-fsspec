@@ -122,12 +122,14 @@ jobs:
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
+          MYSQL_PORT: "3306"
         run: |
           python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
+          MYSQL_PORT: "3306"
         run: |
           python benchmarks/run.py --db mysql --json benchmarks/results-mysql.json
 
@@ -171,12 +173,14 @@ jobs:
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
+          POSTGRES_PORT: "5432"
         run: |
           python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
+          POSTGRES_PORT: "5432"
         run: |
           python benchmarks/run.py --db postgres --json benchmarks/results-postgres.json
 
