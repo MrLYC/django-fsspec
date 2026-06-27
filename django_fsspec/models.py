@@ -25,9 +25,6 @@ class FileNode(models.Model):
 
     class Meta:
         unique_together = [("namespace", "path")]
-        indexes = [
-            models.Index(fields=["namespace", "path"]),
-        ]
 
     def __str__(self):
         return f"FileNode(ns={self.namespace}, path={self.path})"
