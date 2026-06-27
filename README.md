@@ -77,6 +77,22 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 | `ab` | Append (create or append) |
 | `xb` | Exclusive create (file must not exist) |
 
+## Performance
+
+Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size.
+
+| Operation | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
+|-----------|--------|-----------|---------------|-----------|
+| **Write** small (100B) | 2.2ms (455/s) | 4.3ms (230/s) | 3.2ms (316/s) | 3.2ms (314/s) |
+| **Write** medium (10KB) | 2.3ms (438/s) | 4.8ms (207/s) | 3.2ms (312/s) | 3.7ms (270/s) |
+| **Write** large (1MB) | 6.2ms (161/s) | 26.9ms (37/s) | 26.2ms (38/s) | 11.0ms (91/s) |
+| **Read** small (100B) | 1.2ms (851/s) | 2.4ms (417/s) | 2.3ms (434/s) | 2.5ms (399/s) |
+| **Read** large (1MB) | 1.7ms (597/s) | 4.7ms (212/s) | 10.8ms (93/s) | 5.4ms (186/s) |
+| **List** 1000 files | 2.5ms (395/s) | 5.1ms (197/s) | 4.4ms (228/s) | 6.0ms (165/s) |
+| **Delete** | 2.3ms (432/s) | 5.2ms (192/s) | 4.0ms (252/s) | 4.0ms (253/s) |
+
+Full benchmark results (including MySQL 5.7, PG 9.6, concurrency tests) are collected by CI on every push and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
+
 ## Documentation
 
 - [Getting Started](docs/en/getting-started.md)
