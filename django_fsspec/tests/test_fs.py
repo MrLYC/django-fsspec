@@ -3,12 +3,13 @@ from django.test import TestCase
 
 from django_fsspec.buffer import DjangoFile
 from django_fsspec.fs import DjangoFileSystem
+from django_fsspec.models import Namespace
 from django_fsspec.operations import write_file
 
 
 class TestDjangoFileSystem(TestCase):
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=0)
+        self.fs = DjangoFileSystem(namespace=1)
 
     def test_protocol(self):
         assert DjangoFileSystem.protocol == "django"
@@ -57,13 +58,13 @@ class TestDjangoFileSystem(TestCase):
             self.fs.open("/test.txt", "r+b")
 
     def test_ls_root(self):
-        write_file(0, "/a.txt", b"a")
-        write_file(0, "/b.txt", b"b")
+        write_file(1, "/a.txt", b"a")
+        write_file(1, "/b.txt", b"b")
         result = self.fs.ls("/", detail=False)
         assert sorted(result) == ["/a.txt", "/b.txt"]
 
     def test_ls_detail(self):
-        write_file(0, "/test.txt", b"hello")
+        write_file(1, "/test.txt", b"hello")
         result = self.fs.ls("/", detail=True)
         assert len(result) == 1
         assert result[0]["name"] == "/test.txt"
@@ -71,23 +72,23 @@ class TestDjangoFileSystem(TestCase):
         assert result[0]["type"] == "file"
 
     def test_ls_subdirectory(self):
-        write_file(0, "/dir/file.txt", b"data")
+        write_file(1, "/dir/file.txt", b"data")
         result = self.fs.ls("/dir", detail=False)
         assert result == ["/dir/file.txt"]
 
     def test_ls_with_implicit_dirs(self):
-        write_file(0, "/a.txt", b"a")
-        write_file(0, "/sub/b.txt", b"b")
+        write_file(1, "/a.txt", b"a")
+        write_file(1, "/sub/b.txt", b"b")
         result = self.fs.ls("/", detail=False)
         assert sorted(result) == ["/a.txt", "/sub"]
 
     def test_ls_file_directly(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         result = self.fs.ls("/test.txt", detail=False)
         assert result == ["/test.txt"]
 
     def test_ls_file_directly_detail(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         result = self.fs.ls("/test.txt", detail=True)
         assert len(result) == 1
         assert result[0]["name"] == "/test.txt"
@@ -98,13 +99,13 @@ class TestDjangoFileSystem(TestCase):
             self.fs.ls("/nonexistent")
 
     def test_info_file(self):
-        write_file(0, "/test.txt", b"hello")
+        write_file(1, "/test.txt", b"hello")
         info = self.fs.info("/test.txt")
         assert info["type"] == "file"
         assert info["size"] == 5
 
     def test_info_directory(self):
-        write_file(0, "/dir/file.txt", b"data")
+        write_file(1, "/dir/file.txt", b"data")
         info = self.fs.info("/dir")
         assert info["type"] == "directory"
 
@@ -113,7 +114,7 @@ class TestDjangoFileSystem(TestCase):
         assert info["type"] == "directory"
 
     def test_exists(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         assert self.fs.exists("/test.txt")
         assert not self.fs.exists("/nonexistent.txt")
 
@@ -121,59 +122,68 @@ class TestDjangoFileSystem(TestCase):
         assert self.fs.exists("/")
 
     def test_exists_implicit_dir(self):
-        write_file(0, "/dir/file.txt", b"data")
+        write_file(1, "/dir/file.txt", b"data")
         assert self.fs.exists("/dir")
 
     def test_rm(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         self.fs.rm("/test.txt")
         assert not self.fs.exists("/test.txt")
 
     def test_rm_recursive(self):
-        write_file(0, "/dir/a.txt", b"a")
-        write_file(0, "/dir/b.txt", b"b")
+        write_file(1, "/dir/a.txt", b"a")
+        write_file(1, "/dir/b.txt", b"b")
         self.fs.rm("/dir", recursive=True)
         assert not self.fs.exists("/dir")
 
     def test_rm_directory_not_recursive(self):
-        write_file(0, "/dir/file.txt", b"data")
+        write_file(1, "/dir/file.txt", b"data")
         with pytest.raises(IsADirectoryError):
             self.fs.rm("/dir")
 
     def test_cp_file(self):
-        write_file(0, "/src.txt", b"data")
+        write_file(1, "/src.txt", b"data")
         self.fs.cp_file("/src.txt", "/dst.txt")
         assert self.fs.cat("/dst.txt") == b"data"
         assert self.fs.exists("/src.txt")
 
     def test_mv(self):
-        write_file(0, "/src.txt", b"data")
+        write_file(1, "/src.txt", b"data")
         self.fs.mv("/src.txt", "/dst.txt")
         assert self.fs.cat("/dst.txt") == b"data"
         assert not self.fs.exists("/src.txt")
 
-    def test_mkdir_noop(self):
-        self.fs.mkdir("/somedir")  # should not raise
+    def test_mkdir_creates_directory(self):
+        self.fs.mkdir("/somedir")
+        assert self.fs.exists("/somedir")
+        assert self.fs.info("/somedir")["type"] == "directory"
+        assert self.fs.ls("/", detail=False) == ["/somedir"]
 
-    def test_makedirs_noop(self):
-        self.fs.makedirs("/a/b/c")  # should not raise
+    def test_makedirs_creates_parents(self):
+        self.fs.makedirs("/a/b/c")
+        assert self.fs.exists("/a")
+        assert self.fs.exists("/a/b")
+        assert self.fs.exists("/a/b/c")
 
-    def test_rmdir_noop(self):
-        self.fs.rmdir("/somedir")  # should not raise
+    def test_rmdir_removes_empty_directory(self):
+        self.fs.mkdir("/somedir")
+        self.fs.rmdir("/somedir")
+        assert not self.fs.exists("/somedir")
 
     def test_created(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         created = self.fs.created("/test.txt")
         assert created is not None
 
     def test_modified(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         modified = self.fs.modified("/test.txt")
         assert modified is not None
 
     def test_namespace_isolation(self):
-        fs0 = DjangoFileSystem(namespace=0)
-        fs1 = DjangoFileSystem(namespace=1)
+        Namespace.objects.create(id=2, name="other")
+        fs0 = DjangoFileSystem(namespace=1)
+        fs1 = DjangoFileSystem(namespace=2)
 
         with fs0.open("/test.txt", "wb") as f:
             f.write(b"ns0")
@@ -184,18 +194,18 @@ class TestDjangoFileSystem(TestCase):
         assert fs1.cat("/test.txt") == b"ns1"
 
     def test_seek_and_read(self):
-        write_file(0, "/test.txt", b"hello world")
+        write_file(1, "/test.txt", b"hello world")
         with self.fs.open("/test.txt", "rb") as f:
             f.seek(6)
             assert f.read(5) == b"world"
 
     def test_read_partial(self):
-        write_file(0, "/test.txt", b"hello world")
+        write_file(1, "/test.txt", b"hello world")
         with self.fs.open("/test.txt", "rb") as f:
             assert f.read(5) == b"hello"
 
     def test_ls_detail_implicit_dir(self):
-        write_file(0, "/dir/sub/file.txt", b"data")
+        write_file(1, "/dir/sub/file.txt", b"data")
         result = self.fs.ls("/dir", detail=True)
         assert len(result) == 1
         assert result[0]["type"] == "directory"
@@ -206,10 +216,10 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
     """Test extended fsspec API methods."""
 
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=0)
+        self.fs = DjangoFileSystem(namespace=1)
 
     def test_rm_file(self):
-        write_file(0, "/rmfile.txt", b"data")
+        write_file(1, "/rmfile.txt", b"data")
         self.fs.rm_file("/rmfile.txt")
         assert not self.fs.exists("/rmfile.txt")
 
@@ -218,7 +228,7 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
             self.fs.rm_file("/nonexistent.txt")
 
     def test_internal_rm(self):
-        write_file(0, "/rm_internal.txt", b"data")
+        write_file(1, "/rm_internal.txt", b"data")
         self.fs._rm("/rm_internal.txt")
         assert not self.fs.exists("/rm_internal.txt")
 
@@ -228,12 +238,12 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         assert self.fs.cat("/touched.txt") == b""
 
     def test_touch_truncate(self):
-        write_file(0, "/touch_trunc.txt", b"existing data")
+        write_file(1, "/touch_trunc.txt", b"existing data")
         self.fs.touch("/touch_trunc.txt", truncate=True)
         assert self.fs.cat("/touch_trunc.txt") == b""
 
     def test_touch_no_truncate_existing(self):
-        write_file(0, "/touch_keep.txt", b"keep me")
+        write_file(1, "/touch_keep.txt", b"keep me")
         self.fs.touch("/touch_keep.txt", truncate=False)
         assert self.fs.cat("/touch_keep.txt") == b"keep me"
 
@@ -242,49 +252,49 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         assert self.fs.exists("/touch_new.txt")
 
     def test_checksum_returns_sha256(self):
-        write_file(0, "/chk.txt", b"hello")
+        write_file(1, "/chk.txt", b"hello")
         import hashlib
         expected = hashlib.sha256(b"hello").hexdigest()
         assert self.fs.checksum("/chk.txt") == expected
 
     def test_checksum_directory(self):
-        write_file(0, "/dir/file.txt", b"data")
+        write_file(1, "/dir/file.txt", b"data")
         result = self.fs.checksum("/dir")
         assert result == ""  # directories have no checksum
 
     def test_ukey_includes_version(self):
-        write_file(0, "/ukey.txt", b"v1")
+        write_file(1, "/ukey.txt", b"v1")
         key1 = self.fs.ukey("/ukey.txt")
-        write_file(0, "/ukey.txt", b"v2")
+        write_file(1, "/ukey.txt", b"v2")
         key2 = self.fs.ukey("/ukey.txt")
         assert key1 != key2  # version changed
 
     def test_ukey_stable_for_same_version(self):
-        write_file(0, "/ukey_stable.txt", b"data")
+        write_file(1, "/ukey_stable.txt", b"data")
         assert self.fs.ukey("/ukey_stable.txt") == self.fs.ukey("/ukey_stable.txt")
 
     def test_sign_not_supported(self):
-        write_file(0, "/sign.txt", b"data")
+        write_file(1, "/sign.txt", b"data")
         with pytest.raises(NotImplementedError, match="not supported"):
             self.fs.sign("/sign.txt")
 
     def test_find_flat(self):
-        write_file(0, "/find/a.txt", b"a")
-        write_file(0, "/find/b.txt", b"b")
+        write_file(1, "/find/a.txt", b"a")
+        write_file(1, "/find/b.txt", b"b")
         result = self.fs.find("/find")
         assert sorted(result) == ["/find/a.txt", "/find/b.txt"]
 
     def test_find_nested(self):
-        write_file(0, "/find2/a.txt", b"a")
-        write_file(0, "/find2/sub/b.txt", b"b")
-        write_file(0, "/find2/sub/deep/c.txt", b"c")
+        write_file(1, "/find2/a.txt", b"a")
+        write_file(1, "/find2/sub/b.txt", b"b")
+        write_file(1, "/find2/sub/deep/c.txt", b"c")
         result = self.fs.find("/find2")
         assert sorted(result) == ["/find2/a.txt", "/find2/sub/b.txt", "/find2/sub/deep/c.txt"]
 
     def test_find_maxdepth(self):
-        write_file(0, "/findmd/a.txt", b"a")
-        write_file(0, "/findmd/sub/b.txt", b"b")
-        write_file(0, "/findmd/sub/deep/c.txt", b"c")
+        write_file(1, "/findmd/a.txt", b"a")
+        write_file(1, "/findmd/sub/b.txt", b"b")
+        write_file(1, "/findmd/sub/deep/c.txt", b"c")
         # maxdepth=1: direct children only
         result = self.fs.find("/findmd", maxdepth=1)
         assert sorted(result) == ["/findmd/a.txt"]
@@ -293,47 +303,47 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         assert sorted(result) == ["/findmd/a.txt", "/findmd/sub/b.txt"]
 
     def test_find_detail(self):
-        write_file(0, "/findd/test.txt", b"hello")
+        write_file(1, "/findd/test.txt", b"hello")
         result = self.fs.find("/findd", detail=True)
         assert "/findd/test.txt" in result
         assert result["/findd/test.txt"]["size"] == 5
         assert result["/findd/test.txt"]["type"] == "file"
 
     def test_find_withdirs(self):
-        write_file(0, "/findwd/sub/file.txt", b"data")
+        write_file(1, "/findwd/sub/file.txt", b"data")
         result = self.fs.find("/findwd", withdirs=True)
         assert "/findwd/sub" in result
         assert "/findwd/sub/file.txt" in result
 
     def test_find_root(self):
-        write_file(0, "/root_find.txt", b"data")
+        write_file(1, "/root_find.txt", b"data")
         result = self.fs.find("/")
         assert "/root_find.txt" in result
 
     def test_size(self):
-        write_file(0, "/sized.txt", b"12345")
+        write_file(1, "/sized.txt", b"12345")
         assert self.fs.size("/sized.txt") == 5
 
     def test_isfile(self):
-        write_file(0, "/isf.txt", b"data")
+        write_file(1, "/isf.txt", b"data")
         assert self.fs.isfile("/isf.txt")
         assert not self.fs.isfile("/nonexistent")
 
     def test_isdir(self):
-        write_file(0, "/isd/file.txt", b"data")
+        write_file(1, "/isd/file.txt", b"data")
         assert self.fs.isdir("/isd")
         assert not self.fs.isdir("/isd/file.txt")
 
     def test_head(self):
-        write_file(0, "/head.txt", b"hello world")
+        write_file(1, "/head.txt", b"hello world")
         assert self.fs.head("/head.txt", size=5) == b"hello"
 
     def test_tail(self):
-        write_file(0, "/tail.txt", b"hello world")
+        write_file(1, "/tail.txt", b"hello world")
         assert self.fs.tail("/tail.txt", size=5) == b"world"
 
     def test_read_text(self):
-        write_file(0, "/text.txt", b"hello")
+        write_file(1, "/text.txt", b"hello")
         assert self.fs.read_text("/text.txt") == "hello"
 
     def test_write_text(self):
@@ -345,15 +355,15 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         assert self.fs.cat_file("/pipe.txt") == b"piped"
 
     def test_walk(self):
-        write_file(0, "/walk/a.txt", b"a")
-        write_file(0, "/walk/sub/b.txt", b"b")
+        write_file(1, "/walk/a.txt", b"a")
+        write_file(1, "/walk/sub/b.txt", b"b")
         walked = list(self.fs.walk("/walk"))
         # walk returns (dirpath, dirnames, filenames)
         assert len(walked) >= 1
 
     def test_glob(self):
-        write_file(0, "/glob/foo.txt", b"foo")
-        write_file(0, "/glob/bar.py", b"bar")
+        write_file(1, "/glob/foo.txt", b"foo")
+        write_file(1, "/glob/bar.py", b"bar")
         result = self.fs.glob("/glob/*.txt")
         assert "/glob/foo.txt" in result
         assert "/glob/bar.py" not in result
@@ -365,13 +375,13 @@ class TestDjangoFileSystemFsspec(TestCase):
     def test_fsspec_filesystem(self):
         import fsspec
 
-        fs = fsspec.filesystem("django", namespace=0)
+        fs = fsspec.filesystem("django", namespace_id=1)
         assert isinstance(fs, DjangoFileSystem)
 
     def test_fsspec_roundtrip(self):
         import fsspec
 
-        fs = fsspec.filesystem("django", namespace=0)
+        fs = fsspec.filesystem("django", namespace_id=1)
         fs.pipe("/roundtrip.txt", b"fsspec data")
         assert fs.cat("/roundtrip.txt") == b"fsspec data"
         fs.rm("/roundtrip.txt")
@@ -381,7 +391,7 @@ class TestDjangoTransaction(TestCase):
     """Test fsspec transaction backed by Django database transaction."""
 
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=0)
+        self.fs = DjangoFileSystem(namespace=1)
 
     def test_transaction_commit(self):
         """Files written in a transaction should be visible after commit."""

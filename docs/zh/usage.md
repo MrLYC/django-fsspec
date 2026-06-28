@@ -11,14 +11,17 @@
 
 ## 目录操作
 
-目录是隐式的，不存储目录记录：
+目录可以是显式目录，也可以由文件路径隐式推导：
 
 ```python
-fs.mkdir("/any/path")   # no-op，不报错
-fs.makedirs("/a/b/c")   # no-op
-fs.exists("/dir")        # 检查是否有 /dir/ 开头的文件
+fs.mkdir("/empty")       # 持久化一个空目录
+fs.makedirs("/a/b/c")    # 创建父目录
+fs.exists("/dir")        # 显式目录存在，或存在 /dir/ 下的文件时为 True
 fs.info("/dir")          # {"type": "directory", ...}
+fs.rmdir("/empty")       # 删除空的显式目录
 ```
+
+为了兼容历史数据，目录仍可由文件路径推导：即使没有显式目录节点，`/dir/file.txt` 也会让 `/dir` 可见。
 
 ## 列目录
 
@@ -41,6 +44,52 @@ fs.rm("/dir")                         # IsADirectoryError
 fs.cp_file("/src.txt", "/dst.txt")    # 复制（不做块复用）
 fs.mv("/src.txt", "/dst.txt")         # 移动（更新路径）
 ```
+
+## WebDAV 管理接口
+
+`django_fsspec.webdav` 提供一个轻量 WebDAV 管理接口，底层使用 `DjangoFileSystem` 和同一套数据库存储层。
+
+在项目 URLConf 中启用：
+
+```python
+from django.urls import include, path
+
+urlpatterns = [
+    path("webdav/", include("django_fsspec.webdav.urls")),
+]
+```
+
+内置 WebDAV view 要求认证用户，最小安全配置是 Basic Auth。请在 Django 认证中间件之后加入：
+
+```python
+MIDDLEWARE = [
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django_fsspec.webdav.auth.BasicAuthMiddleware",
+]
+```
+
+如果 WebDAV 不是挂载在 `/webdav/`，需要同步配置中间件前缀：
+
+```python
+DJANGO_FSSPEC_WEBDAV_PATH_PREFIX = "/files/"
+```
+
+该中间件只保护此前缀下的请求。不要只依赖浏览器 session authentication 对外暴露 WebDAV 写接口。
+
+在 Django admin 中创建 `Namespace` 并配置读写用户组。超级用户可访问所有 namespace；拥有 `django_fsspec.read_namespace` 或 `django_fsspec.write_namespace` 的用户可全局访问。
+
+请求示例：
+
+```bash
+curl -i -X OPTIONS http://localhost:8000/webdav/1/
+curl -i -u user:password -X MKCOL http://localhost:8000/webdav/1/docs
+curl -i -u user:password -T README.md http://localhost:8000/webdav/1/docs/readme.txt
+curl -i -u user:password -X PROPFIND -H "Depth: 1" http://localhost:8000/webdav/1/docs
+curl -i -u user:password http://localhost:8000/webdav/1/docs/readme.txt
+```
+
+支持方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`COPY`、`MOVE`。暂不支持锁（`LOCK`/`UNLOCK`）、属性修改（`PROPPATCH`）和目录 `COPY`/`MOVE`。
 
 ## 路径规则
 

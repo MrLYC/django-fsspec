@@ -58,7 +58,7 @@ class DjangoFileSystem(AbstractFileSystem):
     protocol = "django"
     transaction_type = DjangoTransaction
 
-    def __init__(self, namespace=0, **kwargs):
+    def __init__(self, namespace=1, **kwargs):
         super().__init__(**kwargs)
         self.namespace = namespace
 
@@ -111,13 +111,24 @@ class DjangoFileSystem(AbstractFileSystem):
         )
 
     def mkdir(self, path, create_parents=True, **kwargs):
-        pass
+        path = self._strip_protocol(path)
+        operations.make_directory(
+            self.namespace,
+            path,
+            create_parents=create_parents,
+        )
 
     def makedirs(self, path, exist_ok=False):
-        pass
+        path = self._strip_protocol(path)
+        try:
+            operations.make_directory(self.namespace, path, create_parents=True)
+        except FileExistsError:
+            if not exist_ok:
+                raise
 
     def rmdir(self, path):
-        pass
+        path = self._strip_protocol(path)
+        operations.remove_directory(self.namespace, path, recursive=False)
 
     def _rm(self, path):
         path = self._strip_protocol(path)
@@ -170,11 +181,13 @@ class DjangoFileSystem(AbstractFileSystem):
         else:
             prefix = path.rstrip("/") + "/"
 
-        from .models import FileNode
+        from .models import NODE_TYPE_DIRECTORY, FileNode
 
-        nodes = FileNode.objects.filter(
-            namespace=self.namespace,
-            path__startswith=prefix,
+        nodes = list(
+            FileNode.objects.filter(
+                namespace=self.namespace,
+                path__startswith=prefix,
+            )
         )
         if maxdepth is not None:
             # Filter by depth: count slashes in relative path
@@ -184,15 +197,13 @@ class DjangoFileSystem(AbstractFileSystem):
                 n for n in nodes
                 if n.path[len(prefix):].count("/") < maxdepth
             ]
-        else:
-            nodes = list(nodes)
 
         results = {}
         for node in nodes:
             entry = {
                 "name": node.path,
-                "size": node.size,
-                "type": "file",
+                "size": node.size if node.node_type != NODE_TYPE_DIRECTORY else 0,
+                "type": node.node_type,
             }
             results[node.path] = entry
 

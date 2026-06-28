@@ -5,6 +5,7 @@ from django.test import TestCase
 from django_fsspec.models import (
     FileBlock,
     FileNode,
+    Namespace,
     StorageBlock,
     get_block_size,
     get_max_file_size,
@@ -14,28 +15,29 @@ from django_fsspec.models import (
 class TestFileNode(TestCase):
     def test_create_file_node(self):
         node = FileNode.objects.create(
-            namespace=0, path="/test.txt", size=100, block_size=256 * 1024
+            namespace_id=1, path="/test.txt", size=100, block_size=256 * 1024
         )
         assert node.pk is not None
         assert node.version == 1
         assert node.checksum == ""
 
     def test_unique_constraint(self):
-        FileNode.objects.create(namespace=0, path="/test.txt", block_size=256 * 1024)
+        FileNode.objects.create(namespace_id=1, path="/test.txt", block_size=256 * 1024)
         with pytest.raises(IntegrityError):
             FileNode.objects.create(
-                namespace=0, path="/test.txt", block_size=256 * 1024
+                namespace_id=1, path="/test.txt", block_size=256 * 1024
             )
 
     def test_different_namespaces(self):
-        FileNode.objects.create(namespace=0, path="/test.txt", block_size=256 * 1024)
+        Namespace.objects.create(id=2, name="other")
+        FileNode.objects.create(namespace_id=1, path="/test.txt", block_size=256 * 1024)
         node2 = FileNode.objects.create(
-            namespace=1, path="/test.txt", block_size=256 * 1024
+            namespace_id=2, path="/test.txt", block_size=256 * 1024
         )
         assert node2.pk is not None
 
     def test_str(self):
-        node = FileNode(namespace=0, path="/test.txt")
+        node = FileNode(namespace_id=1, path="/test.txt")
         assert "test.txt" in str(node)
 
 
@@ -53,7 +55,7 @@ class TestStorageBlock(TestCase):
 class TestFileBlock(TestCase):
     def test_create_file_block(self):
         node = FileNode.objects.create(
-            namespace=0, path="/test.txt", block_size=256 * 1024
+            namespace_id=1, path="/test.txt", block_size=256 * 1024
         )
         block = StorageBlock.objects.create(data=b"hello", size=5)
         fb = FileBlock.objects.create(file=node, block=block, sequence=0)
@@ -61,7 +63,7 @@ class TestFileBlock(TestCase):
 
     def test_unique_sequence(self):
         node = FileNode.objects.create(
-            namespace=0, path="/test.txt", block_size=256 * 1024
+            namespace_id=1, path="/test.txt", block_size=256 * 1024
         )
         block1 = StorageBlock.objects.create(data=b"a", size=1)
         block2 = StorageBlock.objects.create(data=b"b", size=1)
@@ -71,7 +73,7 @@ class TestFileBlock(TestCase):
 
     def test_ordering(self):
         node = FileNode.objects.create(
-            namespace=0, path="/test.txt", block_size=256 * 1024
+            namespace_id=1, path="/test.txt", block_size=256 * 1024
         )
         b1 = StorageBlock.objects.create(data=b"a", size=1)
         b2 = StorageBlock.objects.create(data=b"b", size=1)

@@ -5,7 +5,15 @@ from django.db.models import Case, F, Value, When
 from django.db.models.functions import StrIndex, Substr
 
 from .exceptions import FileConflictError, FileTooLargeError
-from .models import FileBlock, FileNode, StorageBlock, get_block_size, get_max_file_size
+from .models import (
+    NODE_TYPE_DIRECTORY,
+    NODE_TYPE_FILE,
+    FileBlock,
+    FileNode,
+    StorageBlock,
+    get_block_size,
+    get_max_file_size,
+)
 from .validators import validate_path
 
 
@@ -77,15 +85,71 @@ def _release_blocks(file_node: FileNode):
         FileBlock.objects.filter(file=file_node).delete()
 
 
+def _node_info(file_node: FileNode) -> dict:
+    """Return fsspec-style metadata for a stored node."""
+    if file_node.node_type == NODE_TYPE_DIRECTORY:
+        return {
+            "name": file_node.path,
+            "size": 0,
+            "type": "directory",
+            "created": file_node.created_at,
+            "updated": file_node.updated_at,
+        }
+
+    return {
+        "name": file_node.path,
+        "size": file_node.size,
+        "type": "file",
+        "checksum": file_node.checksum,
+        "content_type": file_node.content_type,
+        "version": file_node.version,
+        "block_size": file_node.block_size,
+        "created": file_node.created_at,
+        "updated": file_node.updated_at,
+    }
+
+
+def _reject_root_file_path(path: str):
+    if path == "/":
+        raise IsADirectoryError("Root is a directory")
+
+
+def _ensure_parent_directory(namespace: int, path: str, *, require_exists: bool = False):
+    parent = path.rsplit("/", 1)[0] or "/"
+    if parent == "/":
+        return
+
+    try:
+        parent_info = get_file_info(namespace, parent)
+    except FileNotFoundError:
+        if require_exists:
+            raise FileNotFoundError(f"Parent directory not found: {parent}")
+        return
+
+    if parent_info["type"] != "directory":
+        raise NotADirectoryError(f"Parent is not a directory: {parent}")
+
+
+def _ensure_file_target(namespace: int, path: str):
+    try:
+        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
+    except FileNode.DoesNotExist:
+        return None
+
+    if file_node.node_type == NODE_TYPE_DIRECTORY:
+        raise IsADirectoryError(f"Path is a directory: {path}")
+    return file_node
+
+
 def write_file(
     namespace: int, path: str, data: bytes, content_type: str = ""
 ) -> FileNode:
     """Write data to a file path. Creates or overwrites the file.
 
-    Uses optimistic locking via the version field. If another process modified
-    the file between read and write, raises FileConflictError.
     """
     path = validate_path(path)
+    _reject_root_file_path(path)
+    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
         raise FileTooLargeError(
@@ -97,10 +161,7 @@ def write_file(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
-        try:
-            file_node = FileNode.objects.get(namespace=namespace, path=path)
-        except FileNode.DoesNotExist:
-            file_node = None
+        file_node = _ensure_file_target(namespace, path)
 
         if file_node is not None:
             old_version = file_node.version
@@ -123,8 +184,9 @@ def write_file(
             file_node.refresh_from_db()
         else:
             file_node = FileNode.objects.create(
-                namespace=namespace,
+                namespace_id=namespace,
                 path=path,
+                node_type=NODE_TYPE_FILE,
                 size=len(data),
                 block_size=block_size,
                 checksum=file_checksum,
@@ -147,6 +209,8 @@ def create_file_exclusive(
 ) -> FileNode:
     """Create a file exclusively. Raises FileExistsError if it already exists."""
     path = validate_path(path)
+    _reject_root_file_path(path)
+    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
         raise FileTooLargeError(
@@ -158,13 +222,14 @@ def create_file_exclusive(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
-        if FileNode.objects.filter(namespace=namespace, path=path).exists():
+        if FileNode.objects.filter(namespace_id=namespace, path=path).exists():
             raise FileExistsError(f"File already exists: {path}")
 
         try:
             file_node = FileNode.objects.create(
-                namespace=namespace,
+                namespace_id=namespace,
                 path=path,
+                node_type=NODE_TYPE_FILE,
                 size=len(data),
                 block_size=block_size,
                 checksum=file_checksum,
@@ -194,14 +259,13 @@ def append_file(
     silently losing data.
     """
     path = validate_path(path)
+    _reject_root_file_path(path)
+    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     block_size = get_block_size()
 
     with transaction.atomic():
-        try:
-            file_node = FileNode.objects.get(namespace=namespace, path=path)
-        except FileNode.DoesNotExist:
-            file_node = None
+        file_node = _ensure_file_target(namespace, path)
 
         if file_node is not None:
             # Read existing data within the transaction
@@ -250,8 +314,9 @@ def append_file(
             file_checksum = _compute_checksum(new_data)
 
             file_node = FileNode.objects.create(
-                namespace=namespace,
+                namespace_id=namespace,
                 path=path,
+                node_type=NODE_TYPE_FILE,
                 size=len(new_data),
                 block_size=block_size,
                 checksum=file_checksum,
@@ -281,9 +346,12 @@ def read_file(namespace: int, path: str, verify_checksum: bool = False) -> bytes
     path = validate_path(path)
 
     try:
-        file_node = FileNode.objects.get(namespace=namespace, path=path)
+        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
     except FileNode.DoesNotExist:
         raise FileNotFoundError(f"File not found: {path}")
+
+    if file_node.node_type == NODE_TYPE_DIRECTORY:
+        raise IsADirectoryError(f"Path is a directory: {path}")
 
     file_blocks = (
         FileBlock.objects.filter(file=file_node)
@@ -321,9 +389,12 @@ def read_file_range(namespace: int, path: str, start: int, end: int) -> bytes:
     path = validate_path(path)
 
     try:
-        file_node = FileNode.objects.get(namespace=namespace, path=path)
+        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
     except FileNode.DoesNotExist:
         raise FileNotFoundError(f"File not found: {path}")
+
+    if file_node.node_type == NODE_TYPE_DIRECTORY:
+        raise IsADirectoryError(f"Path is a directory: {path}")
 
     block_size = file_node.block_size
     start_block = start // block_size
@@ -346,28 +417,17 @@ def read_file_range(namespace: int, path: str, start: int, end: int) -> bytes:
 
 
 def get_file_info(namespace: int, path: str) -> dict:
-    """Get file metadata."""
+    """Get file or directory metadata."""
     path = validate_path(path)
 
     try:
-        file_node = FileNode.objects.get(namespace=namespace, path=path)
-        return {
-            "name": file_node.path,
-            "size": file_node.size,
-            "type": "file",
-            "checksum": file_node.checksum,
-            "content_type": file_node.content_type,
-            "version": file_node.version,
-            "block_size": file_node.block_size,
-            "created": file_node.created_at,
-            "updated": file_node.updated_at,
-        }
+        return _node_info(FileNode.objects.get(namespace_id=namespace, path=path))
     except FileNode.DoesNotExist:
         pass
 
     # Check if it's an implicit directory
     prefix = path.rstrip("/") + "/"
-    if FileNode.objects.filter(namespace=namespace, path__startswith=prefix).exists():
+    if FileNode.objects.filter(namespace_id=namespace, path__startswith=prefix).exists():
         return {
             "name": path,
             "size": 0,
@@ -381,50 +441,105 @@ def file_exists(namespace: int, path: str) -> bool:
     """Check if a file or implicit directory exists."""
     path = validate_path(path)
 
-    if FileNode.objects.filter(namespace=namespace, path=path).exists():
+    if FileNode.objects.filter(namespace_id=namespace, path=path).exists():
         return True
 
     # Check implicit directory
     prefix = path.rstrip("/") + "/"
     return FileNode.objects.filter(
-        namespace=namespace, path__startswith=prefix
+        namespace_id=namespace, path__startswith=prefix
     ).exists()
+
+
+
+def make_directory(namespace: int, path: str, create_parents: bool = False) -> FileNode:
+    """Create a durable empty directory."""
+    path = validate_path(path)
+    if path == "/":
+        raise FileExistsError("Root directory already exists")
+
+    existing = FileNode.objects.filter(namespace_id=namespace, path=path).first()
+    if existing is not None:
+        if existing.node_type == NODE_TYPE_DIRECTORY:
+            raise FileExistsError(f"Directory already exists: {path}")
+        raise FileExistsError(f"File already exists: {path}")
+
+    if FileNode.objects.filter(
+        namespace_id=namespace, path__startswith=path.rstrip("/") + "/"
+    ).exists():
+        raise FileExistsError(f"Directory already exists: {path}")
+
+    parent = path.rsplit("/", 1)[0] or "/"
+    if parent != "/":
+        try:
+            parent_info = get_file_info(namespace, parent)
+        except FileNotFoundError:
+            if create_parents:
+                make_directory(namespace, parent, create_parents=True)
+            else:
+                raise FileNotFoundError(f"Parent directory not found: {parent}")
+        else:
+            if parent_info["type"] != "directory":
+                raise NotADirectoryError(f"Parent is not a directory: {parent}")
+
+    return FileNode.objects.create(
+        namespace_id=namespace,
+        path=path,
+        node_type=NODE_TYPE_DIRECTORY,
+        size=0,
+        checksum="",
+        content_type="",
+    )
+
+
+def remove_directory(namespace: int, path: str, recursive: bool = False):
+    """Remove a durable or implicit directory."""
+    path = validate_path(path)
+    if path == "/":
+        raise IsADirectoryError("Cannot remove root directory")
+
+    delete_file(namespace, path, recursive=recursive)
 
 
 def delete_file(namespace: int, path: str, recursive: bool = False):
     """Delete a file or directory."""
     path = validate_path(path)
 
-    # Try as file first
     try:
-        file_node = FileNode.objects.get(namespace=namespace, path=path)
+        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
+    except FileNode.DoesNotExist:
+        file_node = None
+
+    if file_node is not None and file_node.node_type == NODE_TYPE_FILE:
         with transaction.atomic():
             _release_blocks(file_node)
             file_node.delete()
         return
-    except FileNode.DoesNotExist:
-        pass
 
-    # Try as directory
     prefix = path.rstrip("/") + "/"
-    children = FileNode.objects.filter(namespace=namespace, path__startswith=prefix)
+    children = FileNode.objects.filter(namespace_id=namespace, path__startswith=prefix)
 
-    if not children.exists():
+    if file_node is None and not children.exists():
         raise FileNotFoundError(f"Path not found: {path}")
 
-    if not recursive:
+    if children.exists() and not recursive:
         raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
 
     with transaction.atomic():
-        # Mark all blocks as free
+        nodes_to_delete = children
+        if file_node is not None:
+            nodes_to_delete = FileNode.objects.filter(pk=file_node.pk) | children
+
         block_ids = list(
-            FileBlock.objects.filter(file__in=children).values_list(
-                "block_id", flat=True
-            )
+            FileBlock.objects.filter(
+                file__in=nodes_to_delete,
+                file__node_type=NODE_TYPE_FILE,
+            ).values_list("block_id", flat=True)
         )
         if block_ids:
             StorageBlock.objects.filter(id__in=block_ids).update(is_free=True)
-        children.delete()
+        FileBlock.objects.filter(file__in=nodes_to_delete).delete()
+        nodes_to_delete.delete()
 
 
 def list_directory(namespace: int, path: str) -> list[str]:
@@ -433,15 +548,19 @@ def list_directory(namespace: int, path: str) -> list[str]:
         prefix = "/"
     else:
         path = validate_path(path)
+        info = get_file_info(namespace, path)
+        if info["type"] != "directory":
+            raise NotADirectoryError(f"Path is not a directory: {path}")
         prefix = path.rstrip("/") + "/"
 
     prefix_len = len(prefix)
 
     return list(
         FileNode.objects.filter(
-            namespace=namespace,
+            namespace_id=namespace,
             path__startswith=prefix,
         )
+        .exclude(path=path if path != "/" else "")
         .annotate(
             relative=Substr("path", prefix_len + 1),
             slash_pos=StrIndex("relative", Value("/")),
@@ -450,6 +569,7 @@ def list_directory(namespace: int, path: str) -> list[str]:
                 default=Substr("relative", 1, F("slash_pos") - 1),
             ),
         )
+        .exclude(next_part="")
         .values_list("next_part", flat=True)
         .distinct()
         .order_by("next_part")
@@ -485,23 +605,48 @@ def list_directory_detail(namespace: int, path: str) -> list[dict]:
 
 def copy_file(namespace: int, src: str, dst: str):
     """Copy a file from src to dst (no block reuse, copies data)."""
-    data = read_file(namespace, src)
     src_info = get_file_info(namespace, src)
+    if src_info["type"] == "directory":
+        raise IsADirectoryError(f"Source is a directory: {src}")
+    data = read_file(namespace, src)
     write_file(namespace, dst, data, content_type=src_info.get("content_type", ""))
 
 
-def move_file(namespace: int, src: str, dst: str):
+def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
     """Move a file by updating its path."""
     src = validate_path(src)
     dst = validate_path(dst)
+    _reject_root_file_path(src)
+    _reject_root_file_path(dst)
+    _ensure_parent_directory(namespace, dst)
 
-    try:
-        file_node = FileNode.objects.get(namespace=namespace, path=src)
-    except FileNode.DoesNotExist:
-        raise FileNotFoundError(f"File not found: {src}")
+    with transaction.atomic():
+        try:
+            file_node = FileNode.objects.select_for_update().get(
+                namespace_id=namespace,
+                path=src,
+            )
+        except FileNode.DoesNotExist:
+            raise FileNotFoundError(f"File not found: {src}")
 
-    if FileNode.objects.filter(namespace=namespace, path=dst).exists():
-        raise FileExistsError(f"Destination already exists: {dst}")
+        if file_node.node_type == NODE_TYPE_DIRECTORY:
+            raise IsADirectoryError(f"Source is a directory: {src}")
 
-    file_node.path = dst
-    file_node.save(update_fields=["path", "updated_at"])
+        try:
+            dest_node = FileNode.objects.select_for_update().get(
+                namespace_id=namespace,
+                path=dst,
+            )
+        except FileNode.DoesNotExist:
+            dest_node = None
+
+        if dest_node is not None:
+            if not overwrite:
+                raise FileExistsError(f"Destination already exists: {dst}")
+            if dest_node.node_type == NODE_TYPE_DIRECTORY:
+                raise IsADirectoryError(f"Destination is a directory: {dst}")
+            _release_blocks(dest_node)
+            dest_node.delete()
+
+        file_node.path = dst
+        file_node.save(update_fields=["path", "updated_at"])

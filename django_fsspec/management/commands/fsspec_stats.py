@@ -20,7 +20,7 @@ class Command(BaseCommand):
 
         files_qs = FileNode.objects.all()
         if namespace is not None:
-            files_qs = files_qs.filter(namespace=namespace)
+            files_qs = files_qs.filter(namespace_id=namespace)
 
         file_count = files_qs.count()
         total_file_size = files_qs.aggregate(total=Sum("size"))["total"] or 0
@@ -37,7 +37,7 @@ class Command(BaseCommand):
         )
 
         namespaces = (
-            FileNode.objects.values_list("namespace", flat=True).distinct().count()
+            FileNode.objects.values_list("namespace_id", flat=True).distinct().count()
         )
 
         self.stdout.write("Django-fsspec Statistics")

@@ -44,7 +44,7 @@ class Command(BaseCommand):
         self.stdout.write("Checking file checksums...")
         files_qs = FileNode.objects.all()
         if namespace is not None:
-            files_qs = files_qs.filter(namespace=namespace)
+            files_qs = files_qs.filter(namespace_id=namespace)
 
         file_count = 0
         for file_node in files_qs.iterator():
@@ -60,7 +60,7 @@ class Command(BaseCommand):
 
             if file_node.size != actual_size:
                 errors.append(
-                    f"File {file_node.path} (ns={file_node.namespace}): "
+                    f"File {file_node.path} (ns={file_node.namespace_id}): "
                     f"size mismatch (stored={file_node.size}, actual={actual_size})"
                 )
 
@@ -68,7 +68,7 @@ class Command(BaseCommand):
                 expected = hashlib.sha256(data).hexdigest()
                 if file_node.checksum != expected:
                     errors.append(
-                        f"File {file_node.path} (ns={file_node.namespace}): "
+                        f"File {file_node.path} (ns={file_node.namespace_id}): "
                         f"checksum mismatch (stored={file_node.checksum}, "
                         f"computed={expected})"
                     )
@@ -78,7 +78,7 @@ class Command(BaseCommand):
             expected_seq = list(range(len(sequences)))
             if sequences != expected_seq:
                 errors.append(
-                    f"File {file_node.path} (ns={file_node.namespace}): "
+                    f"File {file_node.path} (ns={file_node.namespace_id}): "
                     f"non-contiguous block sequences: {sequences}"
                 )
 

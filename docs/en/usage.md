@@ -11,14 +11,17 @@
 
 ## Directory Operations
 
-Directories are implicit — no directory records are stored:
+Directories can be explicit or implicit:
 
 ```python
-fs.mkdir("/any/path")    # no-op
-fs.makedirs("/a/b/c")   # no-op
-fs.exists("/dir")        # True if any file starts with /dir/
+fs.mkdir("/empty")       # persists an empty directory
+fs.makedirs("/a/b/c")    # creates parent directories
+fs.exists("/dir")        # True for explicit dirs or files under /dir/
 fs.info("/dir")          # {"type": "directory", ...}
+fs.rmdir("/empty")       # removes an empty explicit directory
 ```
+
+Directories are also inferred from file paths for backward compatibility, so `/dir/file.txt` still makes `/dir` visible even if no directory node was created.
 
 ## Listing
 
@@ -41,6 +44,52 @@ fs.rm("/dir")                        # Raises IsADirectoryError
 fs.cp_file("/src.txt", "/dst.txt")   # Copy (no block reuse)
 fs.mv("/src.txt", "/dst.txt")        # Move (updates path field)
 ```
+
+## WebDAV Management Interface
+
+`django_fsspec.webdav` exposes a small WebDAV management API backed by `DjangoFileSystem` and the same database storage layer.
+
+Enable it in your project URLConf:
+
+```python
+from django.urls import include, path
+
+urlpatterns = [
+    path("webdav/", include("django_fsspec.webdav.urls")),
+]
+```
+
+The bundled WebDAV view requires authenticated users and the minimal safe setup is Basic Auth. Add the middleware after Django authentication middleware:
+
+```python
+MIDDLEWARE = [
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django_fsspec.webdav.auth.BasicAuthMiddleware",
+]
+```
+
+If you mount WebDAV somewhere other than `/webdav/`, configure the middleware prefix to match:
+
+```python
+DJANGO_FSSPEC_WEBDAV_PATH_PREFIX = "/files/"
+```
+
+The middleware protects only requests under that prefix. Do not expose WebDAV writes using browser session authentication alone.
+
+Create a `Namespace` in Django admin and assign read/write groups. Superusers can access all namespaces; users with `django_fsspec.read_namespace` or `django_fsspec.write_namespace` can access all namespaces globally.
+
+Example requests:
+
+```bash
+curl -i -X OPTIONS http://localhost:8000/webdav/1/
+curl -i -u user:password -X MKCOL http://localhost:8000/webdav/1/docs
+curl -i -u user:password -T README.md http://localhost:8000/webdav/1/docs/readme.txt
+curl -i -u user:password -X PROPFIND -H "Depth: 1" http://localhost:8000/webdav/1/docs
+curl -i -u user:password http://localhost:8000/webdav/1/docs/readme.txt
+```
+
+Supported methods: `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, `COPY`, and `MOVE`. Locking (`LOCK`/`UNLOCK`), property mutation (`PROPPATCH`), and directory `COPY`/`MOVE` are not supported.
 
 ## Path Rules
 

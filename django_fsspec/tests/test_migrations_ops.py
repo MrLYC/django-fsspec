@@ -8,7 +8,7 @@ from django_fsspec.operations import read_file, write_file
 class TestRechunkOperation(TestCase):
     def test_rechunk_basic(self):
         data = b"A" * 1000
-        write_file(0, "/test.txt", data)
+        write_file(1, "/test.txt", data)
 
         node = FileNode.objects.get(path="/test.txt")
         assert FileBlock.objects.filter(file=node).count() == 1
@@ -18,12 +18,12 @@ class TestRechunkOperation(TestCase):
         node.refresh_from_db()
         assert node.block_size == 500
         assert FileBlock.objects.filter(file=node).count() == 2
-        assert read_file(0, "/test.txt") == data
+        assert read_file(1, "/test.txt") == data
 
     def test_rechunk_to_larger(self):
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
             data = b"B" * 350
-            write_file(0, "/test.txt", data)
+            write_file(1, "/test.txt", data)
 
         node = FileNode.objects.get(path="/test.txt")
         assert node.block_size == 100
@@ -34,10 +34,10 @@ class TestRechunkOperation(TestCase):
         node.refresh_from_db()
         assert node.block_size == 500
         assert FileBlock.objects.filter(file=node).count() == 1
-        assert read_file(0, "/test.txt") == data
+        assert read_file(1, "/test.txt") == data
 
     def test_rechunk_skips_matching(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         node = FileNode.objects.get(path="/test.txt")
         original_block_size = node.block_size
 
@@ -47,25 +47,25 @@ class TestRechunkOperation(TestCase):
         assert node.block_size == original_block_size
 
     def test_rechunk_empty_file(self):
-        write_file(0, "/empty.txt", b"")
+        write_file(1, "/empty.txt", b"")
         self._do_rechunk(500)
         node = FileNode.objects.get(path="/empty.txt")
         assert node.block_size == 500
-        assert read_file(0, "/empty.txt") == b""
+        assert read_file(1, "/empty.txt") == b""
 
     def test_rechunk_multiple_files(self):
-        write_file(0, "/a.txt", b"aaa")
-        write_file(0, "/b.txt", b"bbb")
+        write_file(1, "/a.txt", b"aaa")
+        write_file(1, "/b.txt", b"bbb")
 
         self._do_rechunk(2)
 
         for path, data in [("/a.txt", b"aaa"), ("/b.txt", b"bbb")]:
             node = FileNode.objects.get(path=path)
             assert node.block_size == 2
-            assert read_file(0, path) == data
+            assert read_file(1, path) == data
 
     def test_rechunk_marks_old_blocks_free(self):
-        write_file(0, "/test.txt", b"data")
+        write_file(1, "/test.txt", b"data")
         old_block_count = StorageBlock.objects.filter(is_free=False).count()
 
         self._do_rechunk(2)

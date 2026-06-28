@@ -19,7 +19,7 @@ class TestInitialMigration(MigratorTestCase):
         expected = {
             "id", "namespace", "path", "size", "block_size",
             "checksum", "content_type", "version",
-            "created_at", "updated_at", "blocks",
+            "created_at", "updated_at", "blocks", "node_type",
         }
         assert expected.issubset(field_names), f"Missing fields: {expected - field_names}"
 
@@ -55,7 +55,7 @@ class TestInitialMigration(MigratorTestCase):
         FileBlock = self.new_state.apps.get_model("django_fsspec", "FileBlock")
 
         node = FileNode.objects.create(
-            namespace=0, path="/test.txt", size=5,
+            namespace_id=1, path="/test.txt", size=5,
             block_size=256 * 1024, checksum="abc", version=1,
         )
         block = StorageBlock.objects.create(
@@ -78,7 +78,7 @@ class TestInitialMigration(MigratorTestCase):
         FileBlock = self.new_state.apps.get_model("django_fsspec", "FileBlock")
 
         node = FileNode.objects.create(
-            namespace=0, path="/cascade.txt", size=0,
+            namespace_id=1, path="/cascade.txt", size=0,
             block_size=256 * 1024, version=1,
         )
         block = StorageBlock.objects.create(data=b"", size=0, is_free=False)
@@ -89,13 +89,15 @@ class TestInitialMigration(MigratorTestCase):
 
     def test_namespace_isolation(self):
         FileNode = self.new_state.apps.get_model("django_fsspec", "FileNode")
+        Namespace = self.new_state.apps.get_model("django_fsspec", "Namespace")
+        Namespace.objects.create(id=2, name="other")
 
         FileNode.objects.create(
-            namespace=0, path="/test.txt", size=0,
+            namespace_id=1, path="/test.txt", size=0,
             block_size=256 * 1024, version=1,
         )
         FileNode.objects.create(
-            namespace=1, path="/test.txt", size=0,
+            namespace_id=2, path="/test.txt", size=0,
             block_size=256 * 1024, version=1,
         )
         assert FileNode.objects.count() == 2
@@ -116,7 +118,7 @@ class TestRechunkMigration(MigratorTestCase):
         # File 1: 1000 bytes in one block (block_size=256KB)
         data1 = b"A" * 1000
         node1 = FileNode.objects.create(
-            namespace=0, path="/rechunk/a.txt", size=len(data1),
+            namespace_id=1, path="/rechunk/a.txt", size=len(data1),
             block_size=256 * 1024,
             checksum=hashlib.sha256(data1).hexdigest(),
             version=1,
@@ -130,7 +132,7 @@ class TestRechunkMigration(MigratorTestCase):
 
         # File 2: empty file
         node2 = FileNode.objects.create(
-            namespace=0, path="/rechunk/empty.txt", size=0,
+            namespace_id=1, path="/rechunk/empty.txt", size=0,
             block_size=256 * 1024,
             checksum=hashlib.sha256(b"").hexdigest(),
             version=1,
@@ -139,7 +141,7 @@ class TestRechunkMigration(MigratorTestCase):
         # File 3: already at target block_size (should be skipped)
         data3 = b"B" * 100
         node3 = FileNode.objects.create(
-            namespace=0, path="/rechunk/skip.txt", size=len(data3),
+            namespace_id=1, path="/rechunk/skip.txt", size=len(data3),
             block_size=500,  # target block_size
             checksum=hashlib.sha256(data3).hexdigest(),
             version=1,
