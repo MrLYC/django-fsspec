@@ -4,6 +4,7 @@
 
 ### Added
 - Add scale-based benchmark runs with deterministic seeds and seeded large-table scenarios.
+- Document benchmark scenario design and manual large benchmark workflow.
 - Add a manual Large Benchmark GitHub Actions workflow for medium and large benchmark datasets.
 
 ### Changed

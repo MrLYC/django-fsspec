@@ -104,6 +104,7 @@ For larger seeded datasets, run the manual GitHub Actions workflow “Large Benc
 - [Usage Guide](docs/en/usage.md)
 - [Architecture](docs/en/architecture.md)
 - [Management Commands](docs/en/management-commands.md)
+- [Benchmarks](docs/en/benchmarks.md)
 - [Block Size Migration](docs/en/migration-guide.md)
 - [Exceptions](docs/en/exceptions.md)
 
