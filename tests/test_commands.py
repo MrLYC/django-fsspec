@@ -1,12 +1,19 @@
 from io import StringIO
+import hashlib
 
 import pytest
 from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
 from django.test import TestCase
 
-from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
-from django_fsspec.operations import delete_file, write_file
+from django_fsspec.models import (
+    NODE_TYPE_DIRECTORY,
+    FileBlock,
+    FileNode,
+    Namespace,
+    StorageBlock,
+)
+from django_fsspec.operations import delete_file, read_file, write_file
 
 
 class TestFsspecGc(TestCase):
@@ -176,6 +183,216 @@ class TestFsspecFsck(TestCase):
         with pytest.raises(CommandError):
             call_command("fsspec_fsck", stdout=out)
         assert "non-contiguous" in out.getvalue()
+
+
+class TestFsspecRepair(TestCase):
+    def test_repair_metadata_tampering(self):
+        write_file(1, "/tampered.txt", b"hello")
+        node = FileNode.objects.get(path="/tampered.txt")
+        block = FileBlock.objects.get(file=node).block
+
+        # Attacker role: corrupt derived metadata while leaving bytes intact.
+        block.size = 999
+        block.checksum = "bad_block_checksum"
+        block.save(update_fields=["size", "checksum"])
+        node.size = 999
+        node.checksum = "bad_file_checksum"
+        node.save(update_fields=["size", "checksum"])
+
+        out = StringIO()
+        call_command("fsspec_repair", stdout=out)
+
+        block.refresh_from_db()
+        node.refresh_from_db()
+        assert block.size == 5
+        assert block.checksum == hashlib.sha256(b"hello").hexdigest()
+        assert node.size == 5
+        assert node.checksum == hashlib.sha256(b"hello").hexdigest()
+        assert read_file(1, "/tampered.txt", verify_checksum=True) == b"hello"
+
+        verify = StringIO()
+        call_command("fsspec_fsck", stdout=verify)
+        assert "No errors found" in verify.getvalue()
+
+    def test_repair_free_block_reference_and_sequence_gap(self):
+        data = b"a" * (256 * 1024) + b"b"
+        write_file(1, "/sequence.bin", data)
+        node = FileNode.objects.get(path="/sequence.bin")
+        file_blocks = list(FileBlock.objects.filter(file=node).order_by("sequence"))
+        assert len(file_blocks) == 2
+
+        # Attacker role: mark live storage free and damage block ordering metadata.
+        file_blocks[1].block.is_free = True
+        file_blocks[1].block.save(update_fields=["is_free"])
+        file_blocks[1].sequence = 5
+        file_blocks[1].save(update_fields=["sequence"])
+
+        out = StringIO()
+        call_command("fsspec_repair", stdout=out)
+
+        assert list(
+            FileBlock.objects.filter(file=node).values_list("sequence", flat=True)
+        ) == [0, 1]
+        assert not StorageBlock.objects.filter(
+            id=file_blocks[1].block_id, is_free=True
+        ).exists()
+        assert read_file(1, "/sequence.bin", verify_checksum=True) == data
+
+        verify = StringIO()
+        call_command("fsspec_fsck", stdout=verify)
+        assert "No errors found" in verify.getvalue()
+
+    def test_repair_deleted_mapping_preserves_consistency_not_lost_bytes(self):
+        write_file(1, "/mapping-lost.txt", b"lost")
+        node = FileNode.objects.get(path="/mapping-lost.txt")
+        block_id = FileBlock.objects.get(file=node).block_id
+
+        # Attacker role: delete the only file-to-block mapping. The old bytes still
+        # exist in StorageBlock, but there is no trustworthy path ownership left.
+        FileBlock.objects.filter(file=node).delete()
+
+        out = StringIO()
+        call_command("fsspec_repair", stdout=out)
+
+        node.refresh_from_db()
+        assert node.size == 0
+        assert node.checksum == hashlib.sha256(b"").hexdigest()
+        assert read_file(1, "/mapping-lost.txt", verify_checksum=True) == b""
+        assert StorageBlock.objects.get(id=block_id).is_free
+
+        verify = StringIO()
+        call_command("fsspec_fsck", stdout=verify)
+        assert "No errors found" in verify.getvalue()
+
+    def test_repair_dry_run_does_not_modify_data(self):
+        write_file(1, "/dry-run.txt", b"hello")
+        node = FileNode.objects.get(path="/dry-run.txt")
+        node.size = 999
+        node.save(update_fields=["size"])
+
+        out = StringIO()
+        call_command("fsspec_repair", "--dry-run", stdout=out)
+
+        node.refresh_from_db()
+        assert node.size == 999
+        assert "Would apply" in out.getvalue()
+
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=StringIO())
+
+    def test_repair_healthy_filesystem_noop(self):
+        write_file(1, "/healthy.txt", b"ok")
+
+        out = StringIO()
+        call_command("fsspec_repair", stdout=out)
+
+        assert "No repair actions needed" in out.getvalue()
+        assert read_file(1, "/healthy.txt", verify_checksum=True) == b"ok"
+
+    def test_repair_empty_file_metadata(self):
+        write_file(1, "/empty.txt", b"")
+        node = FileNode.objects.get(path="/empty.txt")
+        node.size = 10
+        node.checksum = "bad"
+        node.save(update_fields=["size", "checksum"])
+
+        call_command("fsspec_repair", stdout=StringIO())
+
+        assert read_file(1, "/empty.txt", verify_checksum=True) == b""
+
+    def test_repair_mixed_adversarial_damage(self):
+        Namespace.objects.create(id=2, name="tenant-2")
+        write_file(1, "/meta.txt", b"metadata")
+        write_file(1, "/large.bin", b"a" * (256 * 1024) + b"b")
+        write_file(1, "/lost.txt", b"lost")
+        write_file(2, "/tenant.txt", b"tenant")
+
+        # Writer role: files were valid before the incident.
+        meta = FileNode.objects.get(namespace_id=1, path="/meta.txt")
+        large = FileNode.objects.get(namespace_id=1, path="/large.bin")
+        lost = FileNode.objects.get(namespace_id=1, path="/lost.txt")
+        tenant = FileNode.objects.get(namespace_id=2, path="/tenant.txt")
+
+        # Metadata attacker role: corrupt derived metadata only.
+        meta_block = FileBlock.objects.get(file=meta).block
+        meta_block.size = 1
+        meta_block.checksum = "bad"
+        meta_block.save(update_fields=["size", "checksum"])
+        meta.size = 1
+        meta.checksum = "bad"
+        meta.save(update_fields=["size", "checksum"])
+
+        # Block-pool attacker role: make a live block look reclaimable and damage
+        # its file ordering.
+        large_blocks = list(FileBlock.objects.filter(file=large).order_by("sequence"))
+        large_blocks[1].block.is_free = True
+        large_blocks[1].block.save(update_fields=["is_free"])
+        large_blocks[1].sequence = 7
+        large_blocks[1].save(update_fields=["sequence"])
+
+        # Mapping attacker role: delete the only path-to-block link.
+        lost_block_id = FileBlock.objects.get(file=lost).block_id
+        FileBlock.objects.filter(file=lost).delete()
+
+        # Schema attacker role: create impossible directory payload state.
+        directory = FileNode.objects.create(
+            namespace_id=1,
+            path="/fake-dir",
+            node_type=NODE_TYPE_DIRECTORY,
+            size=3,
+            checksum="bad",
+        )
+        directory_block = StorageBlock.objects.create(
+            data=b"dir",
+            size=3,
+            checksum=hashlib.sha256(b"dir").hexdigest(),
+            is_free=False,
+        )
+        FileBlock.objects.create(file=directory, block=directory_block, sequence=0)
+
+        # Tenant attacker role: corrupt another namespace in the same repair run.
+        tenant.size = 1
+        tenant.checksum = "bad"
+        tenant.save(update_fields=["size", "checksum"])
+
+        out = StringIO()
+        call_command("fsspec_repair", stdout=out)
+
+        assert read_file(1, "/meta.txt", verify_checksum=True) == b"metadata"
+        assert read_file(1, "/large.bin", verify_checksum=True) == (
+            b"a" * (256 * 1024) + b"b"
+        )
+        assert read_file(1, "/lost.txt", verify_checksum=True) == b""
+        assert read_file(2, "/tenant.txt", verify_checksum=True) == b"tenant"
+        assert StorageBlock.objects.get(id=lost_block_id).is_free
+
+        directory.refresh_from_db()
+        directory_block.refresh_from_db()
+        assert directory.size == 0
+        assert directory.checksum == ""
+        assert directory_block.is_free
+
+        verify = StringIO()
+        call_command("fsspec_fsck", stdout=verify)
+        assert "No errors found" in verify.getvalue()
+
+    def test_repair_namespace_scope(self):
+        Namespace.objects.create(id=2, name="tenant-2")
+        write_file(1, "/local.txt", b"local")
+        write_file(2, "/remote.txt", b"remote")
+
+        local = FileNode.objects.get(namespace_id=1, path="/local.txt")
+        remote = FileNode.objects.get(namespace_id=2, path="/remote.txt")
+        local.size = 99
+        local.save(update_fields=["size"])
+        remote.size = 99
+        remote.save(update_fields=["size"])
+
+        call_command("fsspec_repair", "--namespace=1", stdout=StringIO())
+
+        assert read_file(1, "/local.txt", verify_checksum=True) == b"local"
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", "--namespace=2", stdout=StringIO())
 
 
 class TestFsspecNamespace(TestCase):

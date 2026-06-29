@@ -62,6 +62,57 @@ Checking for orphaned blocks...
 Filesystem check passed. No errors found.
 ```
 
+## fsspec_repair — 尽力修复
+
+通过一条命令修复仍可恢复的数据库破坏：
+
+```bash
+python manage.py fsspec_repair --dry-run
+python manage.py fsspec_repair
+python manage.py fsspec_repair --namespace 1
+```
+
+建议的事故处理流程：
+
+1. 先备份数据库，或先在恢复副本上执行。
+2. 运行 `python manage.py fsspec_repair --dry-run` 查看计划修改。
+3. 运行 `python manage.py fsspec_repair` 应用修复。
+4. 运行 `python manage.py fsspec_fsck` 验证结果。
+
+可修复的场景：
+
+| 破坏场景 | 修复行为 |
+|----------|----------|
+| `StorageBlock.size` 或 `StorageBlock.checksum` 被异常改动 | 根据当前块字节重新计算两个字段 |
+| `FileNode.size` 或 `FileNode.checksum` 被异常改动 | 用当前映射的块重组文件，并重新计算文件元数据 |
+| 活动 `StorageBlock` 被错误标记为 `is_free=True` | 把仍被引用的块重新标记为已使用 |
+| `FileBlock.sequence` 有缺口或不是从 0 开始 | 按现有映射顺序重编号为连续的 `0..N-1` |
+| 目录记录带有块映射或 payload 元数据 | 删除不可能存在的映射，并重置目录 size/checksum |
+| 已用块没有任何 `FileBlock` 所有者 | 全局修复时将其标记为空闲块 |
+
+边界：
+
+- 命令无法凭空恢复已从 `StorageBlock.data` 删除或覆盖的字节。
+- 如果 `FileBlock` 行被删除，残留的孤立块字节已经没有可信的路径归属。修复会按仍存在的映射重算文件，并释放孤立块，让数据库回到一致状态。
+- 如果块映射被调换但 sequence 仍保持连续，数据库里没有权威信号可推断原始顺序。需要保留原始字节顺序时，应从备份恢复。
+- 使用 `--namespace` 可以只修复一个 namespace 的文件和映射。未指定 namespace 时才会执行全局孤立块清理。
+
+示例输出：
+
+```
+Repairing filesystem metadata...
+
+block_metadata: 1
+free_referenced_blocks: 1
+unreferenced_used_blocks: 1
+directory_mappings: 0
+directory_metadata: 0
+file_sequences: 1
+file_metadata: 2
+
+Applied 6 repair actions. Run fsspec_fsck to verify.
+```
+
 ## fsspec_stats — 统计信息
 
 ```bash

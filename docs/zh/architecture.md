@@ -17,7 +17,7 @@
 | `validators.py` | 路径校验和 Unicode NFC 规范化 |
 | `checks.py` | block size 漂移的 Django system check 和启动检查 |
 | `migrations_ops.py` | `RechunkOperation`，用于把已有文件重切到新的 block size |
-| `management/commands/` | 运维命令：`fsspec_stats`、`fsspec_fsck`、`fsspec_gc` |
+| `management/commands/` | 运维命令：`fsspec_stats`、`fsspec_fsck`、`fsspec_repair`、`fsspec_gc` |
 
 ## 三表模型
 
@@ -126,6 +126,7 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 |-------------|------|
 | `fsspec_stats` | 输出 namespace 数、文件数量/大小、已用/空闲块、映射数量 |
 | `fsspec_fsck` | 校验块 checksum、块大小、文件 checksum、文件大小、序号连续性，以及指向空闲块的映射 |
+| `fsspec_repair` | 尽力修复派生元数据、活动/空闲块标记、序号缺口、不可能存在的目录映射，以及未引用但仍标记为已用的块 |
 | `fsspec_gc` | 删除空闲 `StorageBlock`，可选择保留近期空闲记录用于检查 |
 | `check_block_size_consistency` | 当已存文件的 block size 和当前配置不一致时发出 Django warning |
 

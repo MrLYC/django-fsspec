@@ -14,7 +14,7 @@
 - **命名空间分区** — 整数命名空间提供独立路径空间；授权仍由宿主应用负责
 - **路径校验** — 黑名单规则 + Unicode NFC 归一化
 - **隐式目录** — 无目录记录，从文件路径推导
-- **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_stats`
+- **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_repair`、`fsspec_stats`
 
 ## 快速开始
 

@@ -18,7 +18,7 @@ binary blocks, and file-to-block mappings.
 | `validators.py` | Path validation and Unicode NFC normalization |
 | `checks.py` | Django system/startup checks for block-size drift |
 | `migrations_ops.py` | `RechunkOperation` for rewriting existing files to a new block size |
-| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, and `fsspec_gc` |
+| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, `fsspec_repair`, and `fsspec_gc` |
 
 ## Three-Table Model
 
@@ -135,6 +135,7 @@ setting.
 |----------------|---------|
 | `fsspec_stats` | Reports namespace count, file count/size, used/free blocks, and mapping count |
 | `fsspec_fsck` | Verifies block checksums, block sizes, file checksums, file sizes, sequence continuity, and mappings to free blocks |
+| `fsspec_repair` | Best-effort repair for derived metadata, live/free block flags, sequence gaps, impossible directory mappings, and unreferenced used blocks |
 | `fsspec_gc` | Deletes free `StorageBlock` rows, optionally retaining recent free rows for inspection |
 | `check_block_size_consistency` | Emits a Django warning when stored block sizes differ from the configured block size |
 

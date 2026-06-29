@@ -60,6 +60,57 @@ Checking for orphaned blocks...
 Filesystem check passed. No errors found.
 ```
 
+## fsspec_repair — Best-Effort Repair
+
+Repair recoverable database damage with one command:
+
+```bash
+python manage.py fsspec_repair --dry-run
+python manage.py fsspec_repair
+python manage.py fsspec_repair --namespace 1
+```
+
+Recommended incident flow:
+
+1. Back up the database, or run against a restored copy first.
+2. Run `python manage.py fsspec_repair --dry-run` to see the planned changes.
+3. Run `python manage.py fsspec_repair` to apply repairs.
+4. Run `python manage.py fsspec_fsck` to verify the result.
+
+What it can repair:
+
+| Damage scenario | Repair behavior |
+|-----------------|-----------------|
+| `StorageBlock.size` or `StorageBlock.checksum` was changed unexpectedly | Recomputes both fields from the current block bytes |
+| `FileNode.size` or `FileNode.checksum` was changed unexpectedly | Reassembles current mapped blocks and recomputes file metadata |
+| A live `StorageBlock` was incorrectly marked `is_free=True` | Marks referenced blocks as used again |
+| `FileBlock.sequence` has gaps or starts at the wrong number | Renumbers existing mappings to contiguous `0..N-1` order |
+| A directory row has block mappings or payload metadata | Removes impossible mappings and resets directory size/checksum |
+| A used block has no remaining `FileBlock` owner | Marks it free during a global repair |
+
+Limits:
+
+- The command cannot recreate bytes that were deleted or overwritten in `StorageBlock.data`.
+- If `FileBlock` rows were deleted, the remaining orphaned block bytes no longer have a trustworthy path owner. The repair keeps the database consistent by recomputing the file from still-mapped blocks and freeing orphaned blocks.
+- If block mappings were reordered while still keeping contiguous sequence numbers, there is no authoritative database signal for the original order. Restore from backup when original byte order matters.
+- Run with `--namespace` to limit file and mapping repairs to one namespace. Global orphan cleanup only runs when no namespace filter is supplied.
+
+Example output:
+
+```
+Repairing filesystem metadata...
+
+block_metadata: 1
+free_referenced_blocks: 1
+unreferenced_used_blocks: 1
+directory_mappings: 0
+directory_metadata: 0
+file_sequences: 1
+file_metadata: 2
+
+Applied 6 repair actions. Run fsspec_fsck to verify.
+```
+
 ## fsspec_stats — Statistics
 
 Display filesystem statistics:

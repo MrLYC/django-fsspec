@@ -14,7 +14,7 @@ A Django app that provides a file system interface via [fsspec](https://filesyst
 - **Namespace partitioning** — separate path spaces via integer namespace; authorization remains the host app's responsibility
 - **Path validation** — blacklist rules + Unicode NFC normalization
 - **Implicit directories** — no directory records, derived from file paths
-- **Management commands** — `fsspec_gc`, `fsspec_fsck`, `fsspec_stats`
+- **Management commands** — `fsspec_gc`, `fsspec_fsck`, `fsspec_repair`, `fsspec_stats`
 
 ## Quick Start
 
