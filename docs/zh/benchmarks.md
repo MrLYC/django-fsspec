@@ -135,6 +135,17 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `seeded_info` | 0.38ms / 2626 ops/s | 0.73ms / 1370 ops/s | 0.65ms / 1542 ops/s | 0.74ms / 1356 ops/s |
 | `seeded_find` | 644.41ms / 2 ops/s | 736.55ms / 1 ops/s | 494.83ms / 2 ops/s | 753.99ms / 1 ops/s |
 
+### 客观分析
+
+这些数字更适合作为同一套 benchmark 代码下不同后端的方向性对比，不应直接视为生产容量上限。GitHub Actions runner、数据库容器启动状态和宿主机负载都会带来运行间波动。CI 表最适合同组横向比较，因为所有行来自同一次 CI run。手动 medium 和 large 铺底 run 可以按规模与场景比较，但 Large Benchmark workflow 不运行 Django 版本矩阵。
+
+- **CI 规模单操作延迟**：SQLite 在单线程写入、读取、列目录、删除和 seek 场景下延迟最低，因为它不经过网络数据库服务。在网络数据库中，PostgreSQL 的 Django 5.2 行拥有最低的小文件和中文件写入延迟，Oracle 拥有最低的大文件写入延迟，MySQL 在本次 run 中的大文件写入延迟最高。
+- **读取行为**：SQLite 在 `read_small`、`read_large` 和 `seek_read` 中最快。在网络数据库中，MySQL 的 `read_large` 最快，Oracle 居中，PostgreSQL 在该 CI 环境中的大文件读取最慢。
+- **Django 版本影响**：MySQL 8.0 在 Django 5.2 下相对 Django 4.2 的所有 CI 场景都有改善，整表平均延迟约降低 8%。PostgreSQL 16 在 Django 4.2 和 5.2 下基本持平，Django 5.2 的平均延迟约降低 1.4%，单个场景从轻微退化到小幅改善都有出现。
+- **并发表现**：SQLite 在写密集并发场景返回 `database is locked`，这符合 SQLite 串行化写入模型。在网络数据库中，PostgreSQL 的并发写和混合读写延迟最低，MySQL 接近但略慢，Oracle 的并发写接近，但本次 run 中混合读写较慢。
+- **铺底规模变化**：从 medium 到 large，铺底数据从 10,000 文件和 100 目录增长到 50,000 文件和 500 目录。`seeded_find` 接近随文件数线性增长，延迟增加约 4.9x 到 5.4x。`seeded_ls_root` 增加约 3.9x 到 4.6x，说明根目录列举成本明显受总索引路径规模影响。`seeded_info` 基本保持稳定，只变化约 0.9x 到 1.2x，说明直接元数据查询在数据集增长后仍然能较好利用索引。
+- **后端适配判断**：SQLite 适合本地开发、测试和低并发部署。生产环境如果存在并发写，应使用服务端数据库。在这些结果中，PostgreSQL 对并发和递归 `find` 负载最均衡；Oracle 在 large 铺底的根目录列举和 `exists` 上表现较好；MySQL 仍可用，但大文件写入和递归 `find` 相对更慢。
+
 ## 默认 CI 场景
 
 `--scale ci` 默认运行这些场景，并保持稳定的操作名，便于 CI artifacts 对比：

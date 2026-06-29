@@ -135,6 +135,17 @@ These runs use `--scale large --seed 1`, which seeds 50,000 files across 500 dir
 | `seeded_info` | 0.38ms / 2626 ops/s | 0.73ms / 1370 ops/s | 0.65ms / 1542 ops/s | 0.74ms / 1356 ops/s |
 | `seeded_find` | 644.41ms / 2 ops/s | 736.55ms / 1 ops/s | 494.83ms / 2 ops/s | 753.99ms / 1 ops/s |
 
+### Objective analysis
+
+These numbers are useful as a directional comparison between backends under the same benchmark code, not as absolute production capacity limits. GitHub Actions runners, database container startup state, and host load can introduce run-to-run variance. The CI table is the most directly comparable set because all rows come from the same CI run. The manual medium and large seeded runs are comparable by scale and scenario, but the Large Benchmark workflow does not run a Django-version matrix.
+
+- **CI-scale single-operation latency**: SQLite has the lowest latency for single-threaded write, read, list, delete, and seek scenarios because it runs without a networked database service. Among networked databases, PostgreSQL has the lowest small and medium write latency in the Django 5.2 row, Oracle has the lowest large-write latency, and MySQL has the slowest large-write latency in this run.
+- **Read behavior**: SQLite is fastest for `read_small`, `read_large`, and `seek_read`. Among networked databases, MySQL is fastest for `read_large`, Oracle is in the middle, and PostgreSQL is slowest for large reads in this CI environment.
+- **Django version impact**: MySQL 8.0 improves under Django 5.2 compared with Django 4.2 in every CI scenario measured here, with average latency about 8% lower across the table. PostgreSQL 16 is mostly flat across Django 4.2 and 5.2, with average latency about 1.4% lower under Django 5.2 and individual scenarios ranging from a small regression to a small improvement.
+- **Concurrency**: SQLite reports `database is locked` for write-heavy concurrent scenarios, which matches SQLite's serialized write model. Among networked databases, PostgreSQL has the lowest concurrent write and mixed workload latency, MySQL is close but slower, and Oracle is similar for concurrent writes but slower for mixed read/write in this run.
+- **Seeded scale behavior**: Moving from medium to large increases the seeded dataset from 10,000 files and 100 directories to 50,000 files and 500 directories. `seeded_find` scales close to linearly with file count, increasing by about 4.9x to 5.4x. `seeded_ls_root` increases by about 3.9x to 4.6x, which suggests root listing cost is strongly influenced by total indexed path volume. `seeded_info` remains nearly flat at about 0.9x to 1.2x, indicating direct metadata lookup remains index-friendly as the dataset grows.
+- **Backend fit**: SQLite is appropriate for local development, tests, and low-concurrency deployments. For production workloads with concurrent writes, use a server database. PostgreSQL is the most balanced option in these results for concurrent and recursive `find` workloads. Oracle performs well on large seeded root listing and `exists`. MySQL remains viable, but large writes and recursive `find` are comparatively slower in these runs.
+
 ## Default CI scenarios
 
 These scenarios run by default for `--scale ci` and keep stable operation names for CI artifacts:
