@@ -72,20 +72,24 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 
 ## 最新 GitHub 结果
 
-以下数据均来自 commit `eb31d73`，运行时间为 2026-06-29。CI 小规模结果来自 run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170)。手动 medium 铺底结果按数据库分别触发：
+以下数据均来自 2026-06-29 的 GitHub Actions。CI 小规模和 medium 铺底结果来自 commit `eb31d73`。large 铺底结果来自 commit `205aee6`；从 `205aee6` 到 `eb31d73` 之间只修改了 benchmark 文档，没有修改 benchmark 代码、运行时代码、demo settings、测试或 workflow。
 
-| Artifact | Run | 范围 |
-|----------|-----|------|
-| `benchmark-sqlite` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，SQLite |
-| `benchmark-mysql-8.0-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，MySQL 8.0 + Django 4.2 |
-| `benchmark-mysql-8.0-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，MySQL 8.0 + Django 5.2 |
-| `benchmark-postgres-16-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，PostgreSQL 16 + Django 4.2 |
-| `benchmark-postgres-16-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，PostgreSQL 16 + Django 5.2 |
-| `benchmark-oracle` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI 规模，Oracle 23 |
-| `large-benchmark-sqlite-medium-seed-1` | [28381604379](https://github.com/MrLYC/django-fsspec/actions/runs/28381604379) | Medium 规模，SQLite，Django 5.2.15 |
-| `large-benchmark-mysql-medium-seed-1` | [28381612421](https://github.com/MrLYC/django-fsspec/actions/runs/28381612421) | Medium 规模，MySQL 8.0，Django 5.2.15 |
-| `large-benchmark-postgres-medium-seed-1` | [28381595934](https://github.com/MrLYC/django-fsspec/actions/runs/28381595934) | Medium 规模，PostgreSQL 16，Django 5.2.15 |
-| `large-benchmark-oracle-medium-seed-1` | [28381618404](https://github.com/MrLYC/django-fsspec/actions/runs/28381618404) | Medium 规模，Oracle 23，Django 5.2.15 |
+| Artifact | Run | Commit | 范围 |
+|----------|-----|--------|------|
+| `benchmark-sqlite` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，SQLite |
+| `benchmark-mysql-8.0-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，MySQL 8.0 + Django 4.2 |
+| `benchmark-mysql-8.0-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，MySQL 8.0 + Django 5.2 |
+| `benchmark-postgres-16-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，PostgreSQL 16 + Django 4.2 |
+| `benchmark-postgres-16-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，PostgreSQL 16 + Django 5.2 |
+| `benchmark-oracle` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，Oracle 23 |
+| `large-benchmark-sqlite-medium-seed-1` | [28381604379](https://github.com/MrLYC/django-fsspec/actions/runs/28381604379) | `eb31d73` | Medium 规模，SQLite |
+| `large-benchmark-mysql-medium-seed-1` | [28381612421](https://github.com/MrLYC/django-fsspec/actions/runs/28381612421) | `eb31d73` | Medium 规模，MySQL 8.0 |
+| `large-benchmark-postgres-medium-seed-1` | [28381595934](https://github.com/MrLYC/django-fsspec/actions/runs/28381595934) | `eb31d73` | Medium 规模，PostgreSQL 16 |
+| `large-benchmark-oracle-medium-seed-1` | [28381618404](https://github.com/MrLYC/django-fsspec/actions/runs/28381618404) | `eb31d73` | Medium 规模，Oracle 23 |
+| `large-benchmark-sqlite-large-seed-1` | [28373589555](https://github.com/MrLYC/django-fsspec/actions/runs/28373589555) | `205aee6` | Large 规模，SQLite |
+| `large-benchmark-mysql-large-seed-1` | [28373568411](https://github.com/MrLYC/django-fsspec/actions/runs/28373568411) | `205aee6` | Large 规模，MySQL 8.0 |
+| `large-benchmark-postgres-large-seed-1` | [28373362314](https://github.com/MrLYC/django-fsspec/actions/runs/28373362314) | `205aee6` | Large 规模，PostgreSQL 16 |
+| `large-benchmark-oracle-large-seed-1` | [28373585625](https://github.com/MrLYC/django-fsspec/actions/runs/28373585625) | `205aee6` | Large 规模，Oracle 23 |
 
 格式：平均延迟 / 吞吐量。SQLite 的 `concurrent_write` 和 `concurrent_mixed` 返回 `database is locked`；这是 SQLite 串行化写入模型下的合理结果，因此作为 benchmark 结果如实记录。
 
@@ -118,6 +122,18 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `seeded_exists` | 0.99ms / 1014 ops/s | 2.07ms / 483 ops/s | 1.53ms / 652 ops/s | 0.85ms / 1171 ops/s |
 | `seeded_info` | 0.33ms / 3076 ops/s | 0.72ms / 1381 ops/s | 0.69ms / 1448 ops/s | 0.64ms / 1568 ops/s |
 | `seeded_find` | 122.00ms / 8 ops/s | 144.07ms / 7 ops/s | 100.83ms / 10 ops/s | 140.27ms / 7 ops/s |
+
+### Large 铺底结果
+
+这些 run 使用 `--scale large --seed 1`，即在 500 个目录中铺底 50,000 个文件。铺底数据创建时间不计入测量耗时。手动 Large Benchmark workflow 不运行 Django 版本矩阵，而是在运行时安装项目正常的 `django>=4.2` 依赖集合。
+
+| 场景 | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
+|------|--------|-----------|---------------|-----------|
+| `seeded_ls_root` | 60.14ms / 17 ops/s | 86.93ms / 12 ops/s | 124.37ms / 8 ops/s | 51.53ms / 19 ops/s |
+| `seeded_ls_deep` | 8.97ms / 111 ops/s | 18.61ms / 54 ops/s | 10.81ms / 93 ops/s | 4.99ms / 200 ops/s |
+| `seeded_exists` | 3.39ms / 295 ops/s | 6.54ms / 153 ops/s | 3.99ms / 251 ops/s | 1.04ms / 961 ops/s |
+| `seeded_info` | 0.38ms / 2626 ops/s | 0.73ms / 1370 ops/s | 0.65ms / 1542 ops/s | 0.74ms / 1356 ops/s |
+| `seeded_find` | 644.41ms / 2 ops/s | 736.55ms / 1 ops/s | 494.83ms / 2 ops/s | 753.99ms / 1 ops/s |
 
 ## 默认 CI 场景
 

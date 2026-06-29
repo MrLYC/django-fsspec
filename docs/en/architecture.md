@@ -173,7 +173,7 @@ Benchmarked on GitHub Actions (ubuntu-latest) with default 256KB block size. For
 - **MySQL 8.0** improves under Django 5.2 for most measured CI operations compared with Django 4.2, with large writes still the slowest path.
 - **PostgreSQL 16** is stable across Django 4.2 and 5.2; large reads remain slower than SQLite and MySQL in this CI environment.
 - **Oracle 23** has the fastest large-write result among the networked databases in this run and consistent read latency.
-- Full CI scenario data and manually triggered medium seeded-table results are in [Benchmarks](benchmarks.md).
+- Full CI scenario data and manually triggered medium/large seeded-table results are in [Benchmarks](benchmarks.md).
 
 ## Development Setup
 

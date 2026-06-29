@@ -93,7 +93,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 | **列目录** 1000 文件 | 4.2ms (237/s) | 7.0ms (142/s) | 6.8ms (148/s) | 6.4ms (157/s) | 6.3ms (159/s) | 8.2ms (122/s) |
 | **删除** | 2.7ms (375/s) | 5.8ms (173/s) | 5.2ms (193/s) | 3.8ms (263/s) | 3.7ms (273/s) | 4.0ms (251/s) |
 
-完整基准测试结果（含并发测试和手动触发的 medium 铺底数据集）记录在 [基准测试](docs/zh/benchmarks.md)，也可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
+完整基准测试结果（含并发测试和手动触发的 medium/large 铺底数据集）记录在 [基准测试](docs/zh/benchmarks.md)，也可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
 
 ## 文档
 
