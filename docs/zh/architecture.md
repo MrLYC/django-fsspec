@@ -34,7 +34,7 @@
 ## 请求路径
 
 1. fsspec 通过 `django` protocol entry point 实例化
-   `DjangoFileSystem(namespace=...)`。
+   `DjangoFileSystem(namespace_id=...)`。
 2. `DjangoFileSystem` 去掉协议前缀、套用 namespace，并把元数据、列目录、复制、
    移动和删除委托给 `operations.py`。
 3. `open()` 返回 `DjangoFile`，由它实现 fsspec 的 buffered-file 合约。

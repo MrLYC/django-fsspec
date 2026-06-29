@@ -51,7 +51,7 @@ FSSPEC_NS_TEMPLATES = 3
 ```python
 import fsspec
 
-fs = fsspec.filesystem("django", namespace=0)
+fs = fsspec.filesystem("django", namespace_id=1)
 
 # 写入文件
 with fs.open("/hello.txt", "wb") as f:

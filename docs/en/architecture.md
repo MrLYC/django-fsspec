@@ -35,7 +35,7 @@ ordered by `sequence`, which makes block reconstruction deterministic.
 ## Request Path
 
 1. fsspec loads the `django` protocol entry point and instantiates
-   `DjangoFileSystem(namespace=...)`.
+   `DjangoFileSystem(namespace_id=...)`.
 2. `DjangoFileSystem` strips the protocol, applies namespace scope, and delegates
    to `operations.py` for metadata, listing, copy, move, and delete operations.
 3. `open()` returns a `DjangoFile`, which uses fsspec's buffered-file contract.

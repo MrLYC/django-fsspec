@@ -619,7 +619,7 @@ def run_benchmark(db_name, scenarios, ctx):
 
     call_command("migrate", verbosity=0)
 
-    fs = DjangoFileSystem(namespace=DEFAULT_NAMESPACE_ID)
+    fs = DjangoFileSystem(namespace_id=DEFAULT_NAMESPACE_ID)
     results = []
 
     for name, func in scenarios.items():

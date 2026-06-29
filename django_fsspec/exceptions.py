@@ -12,3 +12,7 @@ class PathValidationError(DjangoFsspecError):
 
 class FileTooLargeError(DjangoFsspecError):
     """Raised when file size exceeds MAX_FILE_SIZE."""
+
+
+class NamespaceNotFoundError(DjangoFsspecError, FileNotFoundError):
+    """Raised when an operation targets a missing namespace."""

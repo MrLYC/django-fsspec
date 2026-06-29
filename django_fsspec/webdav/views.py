@@ -214,7 +214,7 @@ class WebDAVView(View):
                 405, "method_not_allowed", "Collection already exists", path=path
             )
 
-        fs = DjangoFileSystem(namespace=namespace_id)
+        fs = DjangoFileSystem(namespace_id=namespace_id)
         fs.mkdir(path, create_parents=False)
         return HttpResponse(status=201)
 

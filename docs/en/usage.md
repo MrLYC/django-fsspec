@@ -105,7 +105,7 @@ Supported methods: `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL
 ```python
 from django_fsspec.operations import read_file
 
-data = read_file(namespace=0, path="/test.txt", verify_checksum=True)
+data = read_file(1, "/test.txt", verify_checksum=True)
 # Raises ValueError on checksum mismatch
 ```
 

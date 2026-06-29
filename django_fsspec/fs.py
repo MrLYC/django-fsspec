@@ -51,16 +51,18 @@ class DjangoFileSystem(AbstractFileSystem):
 
     Parameters
     ----------
-    namespace : int
+    namespace_id : int
         Tenant namespace ID. Files are isolated by namespace.
     """
 
     protocol = "django"
     transaction_type = DjangoTransaction
 
-    def __init__(self, namespace=1, **kwargs):
+    def __init__(self, namespace_id=1, **kwargs):
+        if "namespace" in kwargs:
+            raise TypeError("Use namespace_id, not namespace")
         super().__init__(**kwargs)
-        self.namespace = namespace
+        self.namespace = namespace_id
 
     def ls(self, path, detail=True, **kwargs):
         path = self._strip_protocol(path)

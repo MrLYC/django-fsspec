@@ -84,7 +84,7 @@ def run_e2e(db_name):
     call_command("migrate", verbosity=0)
 
     runner = E2ETestRunner()
-    fs = DjangoFileSystem(namespace=DEFAULT_NAMESPACE_ID)
+    fs = DjangoFileSystem(namespace_id=DEFAULT_NAMESPACE_ID)
 
     # --- Write & Read ---
     def test_write_read():

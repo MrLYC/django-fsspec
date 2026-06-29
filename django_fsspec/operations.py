@@ -4,12 +4,13 @@ from django.db import transaction
 from django.db.models import Case, F, Value, When
 from django.db.models.functions import StrIndex, Substr
 
-from .exceptions import FileConflictError, FileTooLargeError
+from .exceptions import FileConflictError, FileTooLargeError, NamespaceNotFoundError
 from .models import (
     NODE_TYPE_DIRECTORY,
     NODE_TYPE_FILE,
     FileBlock,
     FileNode,
+    Namespace,
     StorageBlock,
     get_block_size,
     get_max_file_size,
@@ -85,6 +86,11 @@ def _reject_root_file_path(path: str):
         raise IsADirectoryError("Root is a directory")
 
 
+def _ensure_namespace_exists(namespace: int):
+    if not Namespace.objects.filter(pk=namespace).exists():
+        raise NamespaceNotFoundError(f"Namespace not found: {namespace}")
+
+
 def _ensure_parent_directory(namespace: int, path: str, *, require_exists: bool = False):
     parent = path.rsplit("/", 1)[0] or "/"
     if parent == "/":
@@ -120,6 +126,7 @@ def write_file(
     """
     path = validate_path(path)
     _reject_root_file_path(path)
+    _ensure_namespace_exists(namespace)
     _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
@@ -181,6 +188,7 @@ def create_file_exclusive(
     """Create a file exclusively. Raises FileExistsError if it already exists."""
     path = validate_path(path)
     _reject_root_file_path(path)
+    _ensure_namespace_exists(namespace)
     _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
@@ -231,6 +239,7 @@ def append_file(
     """
     path = validate_path(path)
     _reject_root_file_path(path)
+    _ensure_namespace_exists(namespace)
     _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     block_size = get_block_size()
@@ -428,6 +437,7 @@ def make_directory(namespace: int, path: str, create_parents: bool = False) -> F
     path = validate_path(path)
     if path == "/":
         raise FileExistsError("Root directory already exists")
+    _ensure_namespace_exists(namespace)
 
     existing = FileNode.objects.filter(namespace_id=namespace, path=path).first()
     if existing is not None:

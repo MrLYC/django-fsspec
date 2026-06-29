@@ -42,7 +42,7 @@ python manage.py migrate
 ```python
 import fsspec
 
-fs = fsspec.filesystem("django", namespace=0)
+fs = fsspec.filesystem("django", namespace_id=1)
 
 # 写入
 with fs.open("/hello.txt", "wb") as f:

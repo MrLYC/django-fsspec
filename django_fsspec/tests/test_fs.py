@@ -2,6 +2,7 @@ import pytest
 from django.test import TestCase
 
 from django_fsspec.buffer import DjangoFile
+from django_fsspec.exceptions import NamespaceNotFoundError
 from django_fsspec.fs import DjangoFileSystem
 from django_fsspec.models import Namespace
 from django_fsspec.operations import write_file
@@ -9,7 +10,7 @@ from django_fsspec.operations import write_file
 
 class TestDjangoFileSystem(TestCase):
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=1)
+        self.fs = DjangoFileSystem(namespace_id=1)
 
     def test_protocol(self):
         assert DjangoFileSystem.protocol == "django"
@@ -197,8 +198,8 @@ class TestDjangoFileSystem(TestCase):
 
     def test_namespace_isolation(self):
         Namespace.objects.create(id=2, name="other")
-        fs0 = DjangoFileSystem(namespace=1)
-        fs1 = DjangoFileSystem(namespace=2)
+        fs0 = DjangoFileSystem(namespace_id=1)
+        fs1 = DjangoFileSystem(namespace_id=2)
 
         with fs0.open("/test.txt", "wb") as f:
             f.write(b"ns0")
@@ -207,6 +208,27 @@ class TestDjangoFileSystem(TestCase):
 
         assert fs0.cat("/test.txt") == b"ns0"
         assert fs1.cat("/test.txt") == b"ns1"
+
+    def test_namespace_id_selects_namespace(self):
+        Namespace.objects.create(id=2, name="other")
+        fs = DjangoFileSystem(namespace_id=2)
+
+        with fs.open("/test.txt", "wb") as f:
+            f.write(b"ns2")
+
+        assert fs.cat("/test.txt") == b"ns2"
+        assert self.fs.exists("/test.txt") is False
+
+    def test_namespace_argument_is_rejected(self):
+        with pytest.raises(TypeError, match="Use namespace_id"):
+            DjangoFileSystem(namespace=1)
+
+    def test_write_missing_namespace_raises_clear_error(self):
+        fs = DjangoFileSystem(namespace_id=0)
+
+        with pytest.raises(NamespaceNotFoundError, match="Namespace not found: 0"):
+            with fs.open("/test.txt", "wb") as f:
+                f.write(b"data")
 
     def test_seek_and_read(self):
         write_file(1, "/test.txt", b"hello world")
@@ -231,7 +253,7 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
     """Test extended fsspec API methods."""
 
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=1)
+        self.fs = DjangoFileSystem(namespace_id=1)
 
     def test_rm_file(self):
         write_file(1, "/rmfile.txt", b"data")
@@ -401,12 +423,18 @@ class TestDjangoFileSystemFsspec(TestCase):
         assert fs.cat("/roundtrip.txt") == b"fsspec data"
         fs.rm("/roundtrip.txt")
 
+    def test_fsspec_namespace_argument_is_rejected(self):
+        import fsspec
+
+        with pytest.raises(TypeError, match="Use namespace_id"):
+            fsspec.filesystem("django", namespace=1, skip_instance_cache=True)
+
 
 class TestDjangoTransaction(TestCase):
     """Test fsspec transaction backed by Django database transaction."""
 
     def setUp(self):
-        self.fs = DjangoFileSystem(namespace=1)
+        self.fs = DjangoFileSystem(namespace_id=1)
 
     def test_transaction_commit(self):
         """Files written in a transaction should be visible after commit."""

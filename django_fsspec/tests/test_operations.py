@@ -3,7 +3,12 @@ import hashlib
 import pytest
 from django.test import TestCase, override_settings
 
-from django_fsspec.exceptions import FileConflictError, FileTooLargeError, PathValidationError
+from django_fsspec.exceptions import (
+    FileConflictError,
+    FileTooLargeError,
+    NamespaceNotFoundError,
+    PathValidationError,
+)
 from django_fsspec.models import FileBlock, FileNode, StorageBlock
 from django_fsspec.operations import (
     append_file,
@@ -86,6 +91,10 @@ class TestWriteFile(TestCase):
         write_file(2, "/test.txt", b"ns2")
         assert read_file(1, "/test.txt") == b"ns1"
         assert read_file(2, "/test.txt") == b"ns2"
+
+    def test_write_missing_namespace_raises_clear_error(self):
+        with pytest.raises(NamespaceNotFoundError, match="Namespace not found: 0"):
+            write_file(0, "/test.txt", b"data")
 
 
 class TestCreateFileExclusive(TestCase):

@@ -106,7 +106,7 @@ curl -i -u user:password http://localhost:8000/webdav/1/docs/readme.txt
 from django_fsspec.operations import read_file
 
 # 读取时校验 checksum
-data = read_file(namespace=0, path="/test.txt", verify_checksum=True)
+data = read_file(1, "/test.txt", verify_checksum=True)
 ```
 
 ## 事务
