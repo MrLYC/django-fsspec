@@ -1,5 +1,22 @@
 # Management Commands
 
+## fsspec_namespace — Namespace Management
+
+Manage namespaces:
+
+```bash
+python manage.py fsspec_namespace list
+python manage.py fsspec_namespace show default
+python manage.py fsspec_namespace show --id 1
+python manage.py fsspec_namespace create media --description "Media files"
+python manage.py fsspec_namespace create media --read-group readers --write-group writers
+python manage.py fsspec_namespace update media --description "Updated description"
+python manage.py fsspec_namespace update media --clear-read-groups
+python manage.py fsspec_namespace delete media
+```
+
+The default namespace is created by migrations as `id=1`, `name=default`, and cannot be deleted by this command.
+
 ## fsspec_gc — Garbage Collection
 
 Clean up free storage blocks:
@@ -21,7 +38,7 @@ Verify data integrity:
 
 ```bash
 python manage.py fsspec_fsck               # Check all
-python manage.py fsspec_fsck --namespace 0  # Check specific namespace
+python manage.py fsspec_fsck --namespace 1  # Check specific namespace
 ```
 
 Checks performed:
@@ -49,7 +66,7 @@ Display filesystem statistics:
 
 ```bash
 python manage.py fsspec_stats
-python manage.py fsspec_stats --namespace 0
+python manage.py fsspec_stats --namespace 1
 ```
 
 Example output:

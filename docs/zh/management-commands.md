@@ -1,5 +1,20 @@
 # 管理命令
 
+## fsspec_namespace — 命名空间管理
+
+```bash
+python manage.py fsspec_namespace list
+python manage.py fsspec_namespace show default
+python manage.py fsspec_namespace show --id 1
+python manage.py fsspec_namespace create media --description "媒体文件"
+python manage.py fsspec_namespace create media --read-group readers --write-group writers
+python manage.py fsspec_namespace update media --description "更新后的描述"
+python manage.py fsspec_namespace update media --clear-read-groups
+python manage.py fsspec_namespace delete media
+```
+
+默认命名空间由迁移创建，`id=1`，`name=default`，该命令不允许删除默认命名空间。
+
 ## fsspec_gc — 清理空闲块
 
 ```bash
@@ -25,7 +40,7 @@ Deleted 42 free blocks (kept 0)
 python manage.py fsspec_fsck
 
 # 只检查特定命名空间
-python manage.py fsspec_fsck --namespace 0
+python manage.py fsspec_fsck --namespace 1
 ```
 
 检查项目：
@@ -51,7 +66,7 @@ Filesystem check passed. No errors found.
 
 ```bash
 python manage.py fsspec_stats
-python manage.py fsspec_stats --namespace 0
+python manage.py fsspec_stats --namespace 1
 ```
 
 示例输出：

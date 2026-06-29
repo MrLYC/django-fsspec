@@ -1,10 +1,11 @@
 from io import StringIO
 
 import pytest
+from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
 from django.test import TestCase
 
-from django_fsspec.models import FileBlock, FileNode, StorageBlock
+from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
 from django_fsspec.operations import delete_file, write_file
 
 
@@ -177,7 +178,189 @@ class TestFsspecFsck(TestCase):
         assert "non-contiguous" in out.getvalue()
 
 
-class TestFsspecStats(TestCase):
+class TestFsspecNamespace(TestCase):
+    def test_namespace_list_includes_default(self):
+        out = StringIO()
+        call_command("fsspec_namespace", "list", stdout=out)
+        output = out.getvalue()
+        assert "default" in output
+        assert "Default namespace" in output
+
+    def test_namespace_create(self):
+        out = StringIO()
+        call_command(
+            "fsspec_namespace",
+            "create",
+            "media",
+            "--description=Media files",
+            stdout=out,
+        )
+
+        namespace = Namespace.objects.get(name="media")
+        assert namespace.description == "Media files"
+        assert "Created namespace" in out.getvalue()
+        assert "media" in out.getvalue()
+
+    def test_namespace_create_duplicate_raises_command_error(self):
+        Namespace.objects.create(name="media")
+
+        out = StringIO()
+        with pytest.raises(CommandError, match="already exists"):
+            call_command("fsspec_namespace", "create", "media", stdout=out)
+
+    def test_namespace_create_with_groups(self):
+        Group.objects.create(name="readers")
+        Group.objects.create(name="writers")
+
+        out = StringIO()
+        call_command(
+            "fsspec_namespace",
+            "create",
+            "media",
+            "--read-group=readers",
+            "--write-group=writers",
+            stdout=out,
+        )
+
+        namespace = Namespace.objects.get(name="media")
+        assert set(namespace.read_groups.values_list("name", flat=True)) == {"readers"}
+        assert set(namespace.write_groups.values_list("name", flat=True)) == {"writers"}
+
+    def test_namespace_create_missing_group_raises_command_error(self):
+        out = StringIO()
+        with pytest.raises(CommandError, match="Group not found"):
+            call_command(
+                "fsspec_namespace",
+                "create",
+                "media",
+                "--read-group=missing",
+                stdout=out,
+            )
+        assert not Namespace.objects.filter(name="media").exists()
+
+    def test_namespace_show_by_name(self):
+        Namespace.objects.create(name="media", description="Media files")
+
+        out = StringIO()
+        call_command("fsspec_namespace", "show", "media", stdout=out)
+        output = out.getvalue()
+        assert "Namespace" in output
+        assert "Name:" in output
+        assert "media" in output
+        assert "Media files" in output
+
+    def test_namespace_show_by_id(self):
+        namespace = Namespace.objects.create(name="media", description="Media files")
+
+        out = StringIO()
+        call_command("fsspec_namespace", "show", f"--id={namespace.id}", stdout=out)
+        output = out.getvalue()
+        assert f"Namespace {namespace.id}" in output
+        assert "media" in output
+
+    def test_namespace_show_missing_raises_command_error(self):
+        out = StringIO()
+        with pytest.raises(CommandError, match="Namespace not found"):
+            call_command("fsspec_namespace", "show", "missing", stdout=out)
+
+    def test_namespace_update_description(self):
+        Namespace.objects.create(name="media", description="Old")
+
+        out = StringIO()
+        call_command(
+            "fsspec_namespace",
+            "update",
+            "media",
+            "--description=New",
+            stdout=out,
+        )
+
+        namespace = Namespace.objects.get(name="media")
+        assert namespace.description == "New"
+        assert "Updated namespace" in out.getvalue()
+
+    def test_namespace_update_groups(self):
+        old = Group.objects.create(name="old")
+        Group.objects.create(name="new")
+        namespace = Namespace.objects.create(name="media")
+        namespace.read_groups.add(old)
+
+        out = StringIO()
+        call_command(
+            "fsspec_namespace",
+            "update",
+            "media",
+            "--read-group=new",
+            stdout=out,
+        )
+
+        namespace = Namespace.objects.get(name="media")
+        assert set(namespace.read_groups.values_list("name", flat=True)) == {"new"}
+
+    def test_namespace_update_clear_groups(self):
+        group = Group.objects.create(name="readers")
+        namespace = Namespace.objects.create(name="media")
+        namespace.read_groups.add(group)
+
+        out = StringIO()
+        call_command(
+            "fsspec_namespace",
+            "update",
+            "media",
+            "--clear-read-groups",
+            stdout=out,
+        )
+
+        namespace = Namespace.objects.get(name="media")
+        assert namespace.read_groups.count() == 0
+
+    def test_namespace_update_no_changes_raises_command_error(self):
+        Namespace.objects.create(name="media")
+
+        out = StringIO()
+        with pytest.raises(CommandError, match="No changes"):
+            call_command("fsspec_namespace", "update", "media", stdout=out)
+
+    def test_namespace_update_rejects_conflicting_group_options(self):
+        Namespace.objects.create(name="media")
+
+        out = StringIO()
+        with pytest.raises(CommandError, match="not both"):
+            call_command(
+                "fsspec_namespace",
+                "update",
+                "media",
+                "--read-group=readers",
+                "--clear-read-groups",
+                stdout=out,
+            )
+
+    def test_namespace_delete_empty_namespace(self):
+        Namespace.objects.create(name="media")
+
+        out = StringIO()
+        call_command("fsspec_namespace", "delete", "media", stdout=out)
+
+        assert not Namespace.objects.filter(name="media").exists()
+        assert "Deleted namespace" in out.getvalue()
+
+    def test_namespace_delete_default_raises_command_error(self):
+        out = StringIO()
+        with pytest.raises(CommandError, match="default namespace"):
+            call_command("fsspec_namespace", "delete", "default", stdout=out)
+
+        assert Namespace.objects.filter(id=1, name="default").exists()
+
+    def test_namespace_delete_with_files_raises_command_error(self):
+        Namespace.objects.create(id=2, name="media")
+        write_file(2, "/test.txt", b"data")
+
+        out = StringIO()
+        with pytest.raises(CommandError, match="contains files"):
+            call_command("fsspec_namespace", "delete", "media", stdout=out)
+
+        assert Namespace.objects.filter(name="media").exists()
+
     def test_stats_empty(self):
         out = StringIO()
         call_command("fsspec_stats", stdout=out)
