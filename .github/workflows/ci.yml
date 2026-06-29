@@ -33,7 +33,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          python -m pytest django_fsspec/tests/ -v --cov=django_fsspec --cov-report=term-missing
+          python -m pytest tests/ -v --cov=django_fsspec --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
 
       - name: Check migrations
         run: |
-          DJANGO_SETTINGS_MODULE=tests.settings python -m django makemigrations --check --dry-run
+          DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
 
   # ---------------------------------------------------------------
   # Stage 2: E2E + Benchmark (real databases, after unit tests pass)

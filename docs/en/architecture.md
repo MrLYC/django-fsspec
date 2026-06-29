@@ -181,5 +181,5 @@ Benchmarked on GitHub Actions (ubuntu-latest) with default 256KB block size. For
 git clone https://github.com/MrLYC/django-fsspec.git
 cd django-fsspec
 pip install -e ".[dev]"
-python -m pytest django_fsspec/tests/ -v --cov=django_fsspec
+python -m pytest tests/ -v --cov=django_fsspec
 ```

@@ -23,19 +23,19 @@ import statistics
 import sys
 import time
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "benchmarks.settings")
-
-import django
-
-django.setup()
-
-from django.core.management import call_command
-
-from django_fsspec.fs import DjangoFileSystem
-from django_fsspec.models import FileBlock, FileNode, StorageBlock
-
 DEFAULT_NAMESPACE_ID = 1
 SEEDED_ROOT = "/bench/seeded"
+
+
+def setup_django():
+    """Initialize Django only for executable benchmark runs."""
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo.settings")
+
+    import django
+    from django.apps import apps
+
+    if not apps.ready:
+        django.setup()
 
 SCALES = {
     "ci": {
@@ -133,6 +133,8 @@ SEEDED_SCENARIOS = [
 
 def reset_db():
     """Clear all data for a clean benchmark run."""
+    from django_fsspec.models import FileBlock, FileNode, StorageBlock
+
     FileBlock.objects.all().delete()
     StorageBlock.objects.all().delete()
     FileNode.objects.all().delete()
@@ -611,6 +613,12 @@ def summarize(result):
 
 def run_benchmark(db_name, scenarios, ctx):
     """Run benchmark scenarios on a specific database."""
+    setup_django()
+
+    from django.core.management import call_command
+
+    from django_fsspec.fs import DjangoFileSystem
+
     print(f"\n{'=' * 60}")
     print(f"  Database: {db_name}")
     print(f"  Backend:  {ctx['backend']}")
@@ -720,6 +728,7 @@ def main():
     all_results = []
 
     if args.db:
+        os.environ.setdefault("DJANGO_FSSPEC_BENCH_DB", "sqlite")
         ctx = make_context(args.scale, args.seed)
         results = run_benchmark(args.db, scenarios, ctx)
         all_results.extend(results)

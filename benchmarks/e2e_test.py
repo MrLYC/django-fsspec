@@ -11,7 +11,8 @@ Usage:
 import os
 import sys
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "benchmarks.settings")
+os.environ.setdefault("DJANGO_FSSPEC_BENCH_DB", "sqlite")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo.settings")
 
 import django
 

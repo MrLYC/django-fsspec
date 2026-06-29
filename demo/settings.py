@@ -1,18 +1,14 @@
-"""Django settings for benchmark and E2E test runs.
-
-Supports four database backends via DJANGO_FSSPEC_BENCH_DB env var:
-  - sqlite (default)
-  - mysql
-  - postgres
-  - oracle
-"""
+"""Shared Django settings for tests, e2e runs, benchmarks, and demo commands."""
 
 import os
 
-SECRET_KEY = "benchmark-secret-key"
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
-BENCH_DB = os.environ.get("DJANGO_FSSPEC_BENCH_DB", "sqlite")
+SECRET_KEY = "demo-secret-key-do-not-use-in-production"
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+ROOT_URLCONF = "demo.urls"
+
+BENCH_DB = os.environ.get("DJANGO_FSSPEC_BENCH_DB")
 
 if BENCH_DB == "mysql":
     DATABASES = {
@@ -48,19 +44,49 @@ elif BENCH_DB == "oracle":
             "PASSWORD": os.environ.get("ORACLE_PASSWORD", "fsspec_test"),
         }
     }
-else:
+elif BENCH_DB == "sqlite":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": os.environ.get(
                 "DJANGO_FSSPEC_BENCH_SQLITE_NAME",
-                os.path.join(os.path.dirname(__file__), "bench.sqlite3"),
+                os.path.join(BASE_DIR, "benchmarks", "bench.sqlite3"),
             ),
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
         }
     }
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
+    "django.contrib.admin",
+    "django.contrib.sessions",
+    "django.contrib.messages",
     "django_fsspec",
+]
+
+MIDDLEWARE = [
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django_fsspec.webdav.auth.BasicAuthMiddleware",
+]
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
 ]

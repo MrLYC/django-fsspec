@@ -172,5 +172,5 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 git clone https://github.com/MrLYC/django-fsspec.git
 cd django-fsspec
 pip install -e ".[dev]"
-python -m pytest django_fsspec/tests/ -v --cov=django_fsspec
+python -m pytest tests/ -v --cov=django_fsspec
 ```

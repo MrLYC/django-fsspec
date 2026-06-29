@@ -2,16 +2,21 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-29
+
 ### Added
 - Add scale-based benchmark runs with deterministic seeds and seeded large-table scenarios.
 - Document benchmark scenario design and manual large benchmark workflow.
 - Add a manual Large Benchmark GitHub Actions workflow for medium and large benchmark datasets.
+- Add a demo Django project settings module and `demo/manage.py` for local checks, tests, e2e, and benchmark runs.
 
 ### Changed
 - Mark package metadata as Production/Stable and align supported Django versions with Python 3.11+ by requiring Django 4.2 or newer.
 - Disable free block reuse on the write path; new writes now always allocate fresh storage blocks, and `fsspec_gc` is responsible for permanently deleting free blocks.
 - Clarify that namespaces provide path partitioning, not an authorization boundary for direct fsspec API callers.
 - Reject `.` path segments in addition to `..` to avoid canonicalization ambiguity.
+- Move tests to the top-level `tests/` directory so test modules are not shipped inside the installable package.
+- Consolidate benchmark and unit-test Django settings into `demo.settings`.
 
 ### Fixed
 - Route fsspec append mode through `append_file()` instead of rewriting stale preloaded file contents.
