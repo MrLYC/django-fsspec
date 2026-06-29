@@ -70,6 +70,55 @@ After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fss
 
 All scales keep the original fixed operation counts for write/read/delete/list/concurrent scenarios. Push/PR CI runs `--scale ci --seed 1` only.
 
+## Latest GitHub results
+
+The data below was collected on GitHub Actions from commit `eb31d73` on 2026-06-29. CI-scale results come from run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170). Manual medium-scale seeded runs were triggered once per database:
+
+| Artifact | Run | Scope |
+|----------|-----|-------|
+| `benchmark-sqlite` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, SQLite |
+| `benchmark-mysql-8.0-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, MySQL 8.0 with Django 4.2 |
+| `benchmark-mysql-8.0-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, MySQL 8.0 with Django 5.2 |
+| `benchmark-postgres-16-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, PostgreSQL 16 with Django 4.2 |
+| `benchmark-postgres-16-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, PostgreSQL 16 with Django 5.2 |
+| `benchmark-oracle` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | CI scale, Oracle 23 |
+| `large-benchmark-sqlite-medium-seed-1` | [28381604379](https://github.com/MrLYC/django-fsspec/actions/runs/28381604379) | Medium scale, SQLite, Django 5.2.15 |
+| `large-benchmark-mysql-medium-seed-1` | [28381612421](https://github.com/MrLYC/django-fsspec/actions/runs/28381612421) | Medium scale, MySQL 8.0, Django 5.2.15 |
+| `large-benchmark-postgres-medium-seed-1` | [28381595934](https://github.com/MrLYC/django-fsspec/actions/runs/28381595934) | Medium scale, PostgreSQL 16, Django 5.2.15 |
+| `large-benchmark-oracle-medium-seed-1` | [28381618404](https://github.com/MrLYC/django-fsspec/actions/runs/28381618404) | Medium scale, Oracle 23, Django 5.2.15 |
+
+Format: average latency / throughput. SQLite `concurrent_write` and `concurrent_mixed` report `database is locked`; that is expected for SQLite's serialized write model and is recorded as a benchmark outcome instead of being hidden.
+
+### CI-scale results
+
+| Scenario | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
+|----------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
+| `write_small` | 4.23ms / 236 ops/s | 8.04ms / 124 ops/s | 7.13ms / 140 ops/s | 6.05ms / 165 ops/s | 5.98ms / 167 ops/s | 6.53ms / 153 ops/s |
+| `write_medium` | 4.47ms / 223 ops/s | 8.39ms / 119 ops/s | 7.51ms / 133 ops/s | 6.08ms / 164 ops/s | 5.97ms / 168 ops/s | 6.91ms / 145 ops/s |
+| `write_large` | 8.21ms / 122 ops/s | 31.28ms / 32 ops/s | 29.34ms / 34 ops/s | 27.14ms / 37 ops/s | 27.13ms / 37 ops/s | 15.94ms / 63 ops/s |
+| `read_small` | 1.42ms / 705 ops/s | 2.58ms / 387 ops/s | 2.40ms / 416 ops/s | 2.50ms / 400 ops/s | 2.45ms / 408 ops/s | 2.68ms / 373 ops/s |
+| `read_large` | 1.82ms / 549 ops/s | 4.48ms / 223 ops/s | 4.12ms / 243 ops/s | 8.18ms / 122 ops/s | 8.23ms / 121 ops/s | 5.73ms / 174 ops/s |
+| `overwrite` | 4.86ms / 206 ops/s | 10.18ms / 98 ops/s | 9.15ms / 109 ops/s | 7.47ms / 134 ops/s | 7.50ms / 133 ops/s | 8.06ms / 124 ops/s |
+| `ls_flat_1000` | 4.21ms / 237 ops/s | 7.02ms / 142 ops/s | 6.78ms / 148 ops/s | 6.35ms / 157 ops/s | 6.30ms / 159 ops/s | 8.21ms / 122 ops/s |
+| `ls_nested_100dirs` | 3.95ms / 253 ops/s | 6.10ms / 164 ops/s | 5.84ms / 171 ops/s | 6.28ms / 159 ops/s | 6.21ms / 161 ops/s | 5.60ms / 179 ops/s |
+| `delete` | 2.67ms / 375 ops/s | 5.77ms / 173 ops/s | 5.18ms / 193 ops/s | 3.81ms / 263 ops/s | 3.67ms / 273 ops/s | 3.98ms / 251 ops/s |
+| `seek_read` | 1.56ms / 642 ops/s | 3.34ms / 299 ops/s | 3.05ms / 328 ops/s | 4.83ms / 207 ops/s | 4.63ms / 216 ops/s | 3.85ms / 260 ops/s |
+| `concurrent_write` | ERROR: database is locked | 6.03ms / 166 ops/s | 5.47ms / 183 ops/s | 4.86ms / 206 ops/s | 4.80ms / 208 ops/s | 5.77ms / 173 ops/s |
+| `concurrent_read` | 2.08ms / 481 ops/s | 3.11ms / 322 ops/s | 2.88ms / 348 ops/s | 2.32ms / 432 ops/s | 2.35ms / 426 ops/s | 3.17ms / 316 ops/s |
+| `concurrent_mixed` | ERROR: database is locked | 3.94ms / 254 ops/s | 3.65ms / 274 ops/s | 3.48ms / 288 ops/s | 3.34ms / 299 ops/s | 4.09ms / 244 ops/s |
+
+### Medium seeded results
+
+These runs use `--scale medium --seed 1`, which seeds 10,000 files across 100 directories. Dataset creation is excluded from the measured timings.
+
+| Scenario | SQLite / Django 5.2.15 | MySQL 8.0 / Django 5.2.15 | PostgreSQL 16 / Django 5.2.15 | Oracle 23 / Django 5.2.15 |
+|----------|------------------------|----------------------------|--------------------------------|---------------------------|
+| `seeded_ls_root` | 13.21ms / 76 ops/s | 21.62ms / 46 ops/s | 26.86ms / 37 ops/s | 13.14ms / 76 ops/s |
+| `seeded_ls_deep` | 4.01ms / 250 ops/s | 7.90ms / 127 ops/s | 6.04ms / 165 ops/s | 4.21ms / 237 ops/s |
+| `seeded_exists` | 0.99ms / 1014 ops/s | 2.07ms / 483 ops/s | 1.53ms / 652 ops/s | 0.85ms / 1171 ops/s |
+| `seeded_info` | 0.33ms / 3076 ops/s | 0.72ms / 1381 ops/s | 0.69ms / 1448 ops/s | 0.64ms / 1568 ops/s |
+| `seeded_find` | 122.00ms / 8 ops/s | 144.07ms / 7 ops/s | 100.83ms / 10 ops/s | 140.27ms / 7 ops/s |
+
 ## Default CI scenarios
 
 These scenarios run by default for `--scale ci` and keep stable operation names for CI artifacts:

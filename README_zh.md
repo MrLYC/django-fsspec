@@ -81,21 +81,19 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## 性能
 
-在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。Push/PR CI 运行有界基准规模（`--scale ci --seed 1`），并上传包含 database、backend、scale、seed 元数据的 JSON artifacts。
+在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。下表来自 commit `eb31d73` 上的 CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170)，参数为 `--scale ci --seed 1`。格式：平均延迟（吞吐量）。
 
-| 操作 | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
-|------|--------|-----------|---------------|-----------|
-| **写入**小文件 (100B) | 2.2ms (450/s) | 4.4ms (226/s) | 3.0ms (333/s) | 3.2ms (313/s) |
-| **写入**中文件 (10KB) | 2.3ms (433/s) | 4.9ms (204/s) | 3.1ms (321/s) | 3.6ms (277/s) |
-| **写入**大文件 (1MB) | 6.6ms (151/s) | 28.0ms (36/s) | 24.0ms (42/s) | 11.3ms (88/s) |
-| **读取**小文件 (100B) | 1.2ms (841/s) | 2.4ms (411/s) | 2.3ms (431/s) | 2.6ms (390/s) |
-| **读取**大文件 (1MB) | 1.7ms (598/s) | 4.5ms (223/s) | 7.8ms (129/s) | 5.5ms (183/s) |
-| **列目录** 1000 文件 | 2.5ms (394/s) | 5.9ms (168/s) | 3.9ms (254/s) | 6.0ms (167/s) |
-| **删除** | 2.4ms (413/s) | 5.3ms (188/s) | 3.5ms (284/s) | 3.7ms (268/s) |
+| 操作 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
+|------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
+| **写入**小文件 (100B) | 4.2ms (236/s) | 8.0ms (124/s) | 7.1ms (140/s) | 6.0ms (165/s) | 6.0ms (167/s) | 6.5ms (153/s) |
+| **写入**中文件 (10KB) | 4.5ms (223/s) | 8.4ms (119/s) | 7.5ms (133/s) | 6.1ms (164/s) | 6.0ms (168/s) | 6.9ms (145/s) |
+| **写入**大文件 (1MB) | 8.2ms (122/s) | 31.3ms (32/s) | 29.3ms (34/s) | 27.1ms (37/s) | 27.1ms (37/s) | 15.9ms (63/s) |
+| **读取**小文件 (100B) | 1.4ms (705/s) | 2.6ms (387/s) | 2.4ms (416/s) | 2.5ms (400/s) | 2.5ms (408/s) | 2.7ms (373/s) |
+| **读取**大文件 (1MB) | 1.8ms (549/s) | 4.5ms (223/s) | 4.1ms (243/s) | 8.2ms (122/s) | 8.2ms (121/s) | 5.7ms (174/s) |
+| **列目录** 1000 文件 | 4.2ms (237/s) | 7.0ms (142/s) | 6.8ms (148/s) | 6.4ms (157/s) | 6.3ms (159/s) | 8.2ms (122/s) |
+| **删除** | 2.7ms (375/s) | 5.8ms (173/s) | 5.2ms (193/s) | 3.8ms (263/s) | 3.7ms (273/s) | 4.0ms (251/s) |
 
-完整基准测试结果（含并发测试）由 CI 在每次推送时自动收集，可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
-
-更大的铺底数据集可通过手动 GitHub Actions workflow “Large Benchmark” 运行。它支持 `database`（`sqlite`、`mysql`、`postgres`、`oracle`）、`scale`（`medium`、`large`）、`seed` 和可选 `scenario` 输入；运行结果包含铺底数据上的 `ls`、`exists`、`info`、`find` 场景，并上传按数据库、规模、seed 命名的 JSON artifacts。
+完整基准测试结果（含并发测试和手动触发的 medium 铺底数据集）记录在 [基准测试](docs/zh/benchmarks.md)，也可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
 
 ## 文档
 

@@ -131,40 +131,40 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 
 ## 性能基线
 
-在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。格式：平均延迟 / 吞吐量。由 CI 自动更新。
+在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。格式：平均延迟 / 吞吐量。来源：commit `eb31d73` 上的 CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170)，参数为 `--scale ci --seed 1`。
 
 ### 写入操作
 
-| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
-|------|--------|-----------|-------|-----------|
-| 写入小文件 (100B) | 2.22ms / 450 ops/s | 4.43ms / 226 ops/s | 3.00ms / 333 ops/s | 3.20ms / 313 ops/s |
-| 写入中文件 (10KB) | 2.31ms / 433 ops/s | 4.90ms / 204 ops/s | 3.11ms / 321 ops/s | 3.61ms / 277 ops/s |
-| 写入大文件 (1MB) | 6.63ms / 151 ops/s | 28.03ms / 36 ops/s | 24.00ms / 42 ops/s | 11.30ms / 88 ops/s |
-| 覆盖写 | 3.76ms / 266 ops/s | 9.14ms / 109 ops/s | 6.27ms / 159 ops/s | 7.17ms / 139 ops/s |
+| 操作 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
+|------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
+| 写入小文件 (100B) | 4.23ms / 236 ops/s | 8.04ms / 124 ops/s | 7.13ms / 140 ops/s | 6.05ms / 165 ops/s | 5.98ms / 167 ops/s | 6.53ms / 153 ops/s |
+| 写入中文件 (10KB) | 4.47ms / 223 ops/s | 8.39ms / 119 ops/s | 7.51ms / 133 ops/s | 6.08ms / 164 ops/s | 5.97ms / 168 ops/s | 6.91ms / 145 ops/s |
+| 写入大文件 (1MB) | 8.21ms / 122 ops/s | 31.28ms / 32 ops/s | 29.34ms / 34 ops/s | 27.14ms / 37 ops/s | 27.13ms / 37 ops/s | 15.94ms / 63 ops/s |
+| 覆盖写 | 4.86ms / 206 ops/s | 10.18ms / 98 ops/s | 9.15ms / 109 ops/s | 7.47ms / 134 ops/s | 7.50ms / 133 ops/s | 8.06ms / 124 ops/s |
 
 ### 读取操作
 
-| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
-|------|--------|-----------|-------|-----------|
-| 读取小文件 (100B) | 1.19ms / 841 ops/s | 2.43ms / 411 ops/s | 2.32ms / 431 ops/s | 2.56ms / 390 ops/s |
-| 读取大文件 (1MB) | 1.67ms / 598 ops/s | 4.48ms / 223 ops/s | 7.77ms / 129 ops/s | 5.48ms / 183 ops/s |
-| 随机读 (seek+read) | 1.36ms / 738 ops/s | 3.20ms / 312 ops/s | 4.59ms / 218 ops/s | 3.69ms / 271 ops/s |
+| 操作 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
+|------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
+| 读取小文件 (100B) | 1.42ms / 705 ops/s | 2.58ms / 387 ops/s | 2.40ms / 416 ops/s | 2.50ms / 400 ops/s | 2.45ms / 408 ops/s | 2.68ms / 373 ops/s |
+| 读取大文件 (1MB) | 1.82ms / 549 ops/s | 4.48ms / 223 ops/s | 4.12ms / 243 ops/s | 8.18ms / 122 ops/s | 8.23ms / 121 ops/s | 5.73ms / 174 ops/s |
+| 随机读 (seek+read) | 1.56ms / 642 ops/s | 3.34ms / 299 ops/s | 3.05ms / 328 ops/s | 4.83ms / 207 ops/s | 4.63ms / 216 ops/s | 3.85ms / 260 ops/s |
 
 ### 目录和删除操作
 
-| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
-|------|--------|-----------|-------|-----------|
-| 列目录 (1000 文件) | 2.54ms / 394 ops/s | 5.94ms / 168 ops/s | 3.94ms / 254 ops/s | 5.97ms / 167 ops/s |
-| 列嵌套目录 (100 子目录) | 2.17ms / 460 ops/s | 4.04ms / 247 ops/s | 3.55ms / 282 ops/s | 3.56ms / 281 ops/s |
-| 删除 | 2.42ms / 413 ops/s | 5.33ms / 188 ops/s | 3.52ms / 284 ops/s | 3.73ms / 268 ops/s |
+| 操作 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
+|------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
+| 列目录 (1000 文件) | 4.21ms / 237 ops/s | 7.02ms / 142 ops/s | 6.78ms / 148 ops/s | 6.35ms / 157 ops/s | 6.30ms / 159 ops/s | 8.21ms / 122 ops/s |
+| 列嵌套目录 (100 子目录) | 3.95ms / 253 ops/s | 6.10ms / 164 ops/s | 5.84ms / 171 ops/s | 6.28ms / 159 ops/s | 6.21ms / 161 ops/s | 5.60ms / 179 ops/s |
+| 删除 | 2.67ms / 375 ops/s | 5.77ms / 173 ops/s | 5.18ms / 193 ops/s | 3.81ms / 263 ops/s | 3.67ms / 273 ops/s | 3.98ms / 251 ops/s |
 
 ### 关键发现
 
-- **SQLite** 全场景最快（无网络开销）
-- **MySQL 8.0** 大文件写入较慢，但仍处在目标负载范围内
-- **PostgreSQL 16** 小文件写入性能优秀，但大文件读取较慢（TOAST 开销）
-- **Oracle** 延迟稳定一致
-- 所有数据库都能良好支持目标场景（3 万小文件）——即使最慢的写入（MySQL 8.0 大文件 36 ops/s）也能在约 14 分钟内写完 3 万文件
+- **SQLite** 在本地读取和随机读取上仍然最快，但并发写和混合读写会体现 SQLite 预期内的 `database is locked` 行为。
+- **MySQL 8.0** 在 Django 5.2 下多数 CI 场景优于 Django 4.2，但大文件写入仍是最慢路径。
+- **PostgreSQL 16** 在 Django 4.2 和 5.2 下表现接近；在该 CI 环境中，大文件读取慢于 SQLite 和 MySQL。
+- **Oracle 23** 在本次 run 中拥有网络数据库里最快的大文件写入结果，读取延迟也较稳定。
+- 完整 CI 场景数据和手动触发的 medium 铺底结果见 [基准测试](benchmarks.md)。
 
 ## 开发环境
 
