@@ -844,9 +844,15 @@ def run_e2e(db_name):
         if skip_concurrency:
             return
         runner.reset_db()
-        n_namespaces = 4
+        namespace_ids = list(range(DEFAULT_NAMESPACE_ID, DEFAULT_NAMESPACE_ID + 4))
         n_files = 15
         errors = []
+
+        for ns in namespace_ids:
+            Namespace.objects.get_or_create(
+                id=ns,
+                defaults={"name": f"e2e-ns-{ns}", "description": "E2E test namespace"},
+            )
 
         def ns_writer(ns):
             try:
@@ -855,15 +861,15 @@ def run_e2e(db_name):
             except Exception as e:
                 errors.append(("ns_writer", ns, e))
 
-        with ThreadPoolExecutor(max_workers=n_namespaces) as pool:
-            futures = [pool.submit(ns_writer, ns) for ns in range(n_namespaces)]
+        with ThreadPoolExecutor(max_workers=len(namespace_ids)) as pool:
+            futures = [pool.submit(ns_writer, ns) for ns in namespace_ids]
             for f in as_completed(futures):
                 f.result()
 
         assert len(errors) == 0, f"Namespace errors: {errors}"
 
         # Verify isolation
-        for ns in range(n_namespaces):
+        for ns in namespace_ids:
             for i in range(n_files):
                 data = read_file(ns, f"/tx/ns/file{i}.txt")
                 expected = f"ns{ns}-{i}".encode()
