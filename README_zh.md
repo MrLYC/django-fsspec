@@ -81,7 +81,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## 性能
 
-在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。由 CI 自动更新。
+在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。Push/PR CI 运行有界基准规模（`--scale ci --seed 1`），并上传包含 database、backend、scale、seed 元数据的 JSON artifacts。
 
 | 操作 | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
 |------|--------|-----------|---------------|-----------|
@@ -94,6 +94,8 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 | **删除** | 2.4ms (413/s) | 5.3ms (188/s) | 3.5ms (284/s) | 3.7ms (268/s) |
 
 完整基准测试结果（含并发测试）由 CI 在每次推送时自动收集，可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
+
+更大的铺底数据集可通过手动 GitHub Actions workflow “Large Benchmark” 运行。它支持 `database`（`sqlite`、`mysql`、`postgres`、`oracle`）、`scale`（`medium`、`large`）、`seed` 和可选 `scenario` 输入；运行结果包含铺底数据上的 `ls`、`exists`、`info`、`find` 场景，并上传按数据库、规模、seed 命名的 JSON artifacts。
 
 ## 文档
 

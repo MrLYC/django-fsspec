@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- Add scale-based benchmark runs with deterministic seeds and seeded large-table scenarios.
+- Add a manual Large Benchmark GitHub Actions workflow for medium and large benchmark datasets.
+
 ### Changed
 - Mark package metadata as Production/Stable and align supported Django versions with Python 3.11+ by requiring Django 4.2 or newer.
 - Disable free block reuse on the write path; new writes now always allocate fresh storage blocks, and `fsspec_gc` is responsible for permanently deleting free blocks.

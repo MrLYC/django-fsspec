@@ -73,7 +73,7 @@ jobs:
         run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/e2e_test.py
 
       - name: Benchmark
-        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --json benchmarks/results-sqlite.json
+        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json benchmarks/results-sqlite.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -140,7 +140,7 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: python benchmarks/run.py --db mysql-django-${{ matrix.django-version }} --json benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
+        run: python benchmarks/run.py --db mysql-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -198,7 +198,7 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: python benchmarks/run.py --db postgres-django-${{ matrix.django-version }} --json benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
+        run: python benchmarks/run.py --db postgres-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -246,7 +246,7 @@ jobs:
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
-        run: python benchmarks/run.py --db oracle --json benchmarks/results-oracle.json
+        run: python benchmarks/run.py --db oracle --scale ci --seed 1 --json benchmarks/results-oracle.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4

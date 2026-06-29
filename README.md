@@ -81,7 +81,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## Performance
 
-Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. Updated by CI.
+Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. Push/PR CI runs the bounded benchmark scale (`--scale ci --seed 1`) and uploads JSON artifacts that include database, backend, scale, and seed metadata.
 
 | Operation | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
 |-----------|--------|-----------|---------------|-----------|
@@ -94,6 +94,8 @@ Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. Updated
 | **Delete** | 2.4ms (413/s) | 5.3ms (188/s) | 3.5ms (284/s) | 3.7ms (268/s) |
 
 Full benchmark results (including concurrency tests) are collected by CI on every push and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
+
+For larger seeded datasets, run the manual GitHub Actions workflow “Large Benchmark”. It accepts `database` (`sqlite`, `mysql`, `postgres`, `oracle`), `scale` (`medium`, `large`), `seed`, and optional `scenario` inputs. These runs include seeded `ls`, `exists`, `info`, and `find` scenarios and upload JSON artifacts named with the database, scale, and seed.
 
 ## Documentation
 
