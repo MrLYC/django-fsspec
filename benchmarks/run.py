@@ -31,6 +31,9 @@ from django_fsspec.fs import DjangoFileSystem
 from django_fsspec.models import FileBlock, FileNode, StorageBlock
 
 
+DEFAULT_NAMESPACE_ID = 1
+
+
 def reset_db():
     """Clear all data for a clean benchmark run."""
     FileBlock.objects.all().delete()
@@ -339,7 +342,7 @@ def run_benchmark(db_name, scenarios):
 
     call_command("migrate", verbosity=0)
 
-    fs = DjangoFileSystem(namespace=0)
+    fs = DjangoFileSystem(namespace=DEFAULT_NAMESPACE_ID)
     results = []
 
     for name, func in scenarios.items():

@@ -22,7 +22,7 @@ from django.test.utils import override_settings
 
 from django_fsspec.exceptions import FileConflictError, FileTooLargeError, PathValidationError
 from django_fsspec.fs import DjangoFileSystem
-from django_fsspec.models import FileBlock, FileNode, StorageBlock
+from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
 from django_fsspec.operations import (
     read_file,
     read_file_range,
@@ -36,6 +36,10 @@ from django_fsspec.operations import (
     create_file_exclusive,
     append_file,
 )
+
+
+DEFAULT_NAMESPACE_ID = 1
+SECONDARY_NAMESPACE_ID = 2
 
 
 class E2ETestRunner:
@@ -80,28 +84,28 @@ def run_e2e(db_name):
     call_command("migrate", verbosity=0)
 
     runner = E2ETestRunner()
-    fs = DjangoFileSystem(namespace=0)
+    fs = DjangoFileSystem(namespace=DEFAULT_NAMESPACE_ID)
 
     # --- Write & Read ---
     def test_write_read():
         runner.reset_db()
-        write_file(0, "/test.txt", b"hello world")
-        assert read_file(0, "/test.txt") == b"hello world"
+        write_file(DEFAULT_NAMESPACE_ID, "/test.txt", b"hello world")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/test.txt") == b"hello world"
 
     runner.run("write_read", test_write_read)
 
     def test_write_empty():
         runner.reset_db()
-        write_file(0, "/empty.txt", b"")
-        assert read_file(0, "/empty.txt") == b""
+        write_file(DEFAULT_NAMESPACE_ID, "/empty.txt", b"")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/empty.txt") == b""
 
     runner.run("write_empty", test_write_empty)
 
     def test_write_overwrite():
         runner.reset_db()
-        write_file(0, "/file.txt", b"v1")
-        write_file(0, "/file.txt", b"v2")
-        assert read_file(0, "/file.txt") == b"v2"
+        write_file(DEFAULT_NAMESPACE_ID, "/file.txt", b"v1")
+        write_file(DEFAULT_NAMESPACE_ID, "/file.txt", b"v2")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/file.txt") == b"v2"
         node = FileNode.objects.get(path="/file.txt")
         assert node.version == 2
 
@@ -110,8 +114,8 @@ def run_e2e(db_name):
     def test_write_multi_block():
         runner.reset_db()
         data = b"A" * (256 * 1024 + 100)
-        write_file(0, "/big.bin", data)
-        assert read_file(0, "/big.bin") == data
+        write_file(DEFAULT_NAMESPACE_ID, "/big.bin", data)
+        assert read_file(DEFAULT_NAMESPACE_ID, "/big.bin") == data
         node = FileNode.objects.get(path="/big.bin")
         assert FileBlock.objects.filter(file=node).count() == 2
 
@@ -120,10 +124,10 @@ def run_e2e(db_name):
     # --- Exclusive Create ---
     def test_exclusive_create():
         runner.reset_db()
-        create_file_exclusive(0, "/new.txt", b"data")
-        assert read_file(0, "/new.txt") == b"data"
+        create_file_exclusive(DEFAULT_NAMESPACE_ID, "/new.txt", b"data")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/new.txt") == b"data"
         try:
-            create_file_exclusive(0, "/new.txt", b"other")
+            create_file_exclusive(DEFAULT_NAMESPACE_ID, "/new.txt", b"other")
             assert False, "Should have raised FileExistsError"
         except FileExistsError:
             pass
@@ -133,17 +137,17 @@ def run_e2e(db_name):
     # --- Append ---
     def test_append():
         runner.reset_db()
-        write_file(0, "/log.txt", b"line1\n")
-        append_file(0, "/log.txt", b"line2\n")
-        assert read_file(0, "/log.txt") == b"line1\nline2\n"
+        write_file(DEFAULT_NAMESPACE_ID, "/log.txt", b"line1\n")
+        append_file(DEFAULT_NAMESPACE_ID, "/log.txt", b"line2\n")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/log.txt") == b"line1\nline2\n"
 
     runner.run("append", test_append)
 
     # --- Range Read ---
     def test_range_read():
         runner.reset_db()
-        write_file(0, "/data.txt", b"ABCDEFGHIJ")
-        assert read_file_range(0, "/data.txt", 3, 7) == b"DEFG"
+        write_file(DEFAULT_NAMESPACE_ID, "/data.txt", b"ABCDEFGHIJ")
+        assert read_file_range(DEFAULT_NAMESPACE_ID, "/data.txt", 3, 7) == b"DEFG"
 
     runner.run("range_read", test_range_read)
 
@@ -151,8 +155,8 @@ def run_e2e(db_name):
         runner.reset_db()
         bs = 256 * 1024
         data = b"X" * bs + b"Y" * bs
-        write_file(0, "/cross.bin", data)
-        result = read_file_range(0, "/cross.bin", bs - 5, bs + 5)
+        write_file(DEFAULT_NAMESPACE_ID, "/cross.bin", data)
+        result = read_file_range(DEFAULT_NAMESPACE_ID, "/cross.bin", bs - 5, bs + 5)
         assert result == b"X" * 5 + b"Y" * 5
 
     runner.run("range_read_cross_block", test_range_read_cross_block)
@@ -160,8 +164,8 @@ def run_e2e(db_name):
     # --- Verify Checksum ---
     def test_verify_checksum():
         runner.reset_db()
-        write_file(0, "/check.txt", b"verify me")
-        data = read_file(0, "/check.txt", verify_checksum=True)
+        write_file(DEFAULT_NAMESPACE_ID, "/check.txt", b"verify me")
+        data = read_file(DEFAULT_NAMESPACE_ID, "/check.txt", verify_checksum=True)
         assert data == b"verify me"
 
     runner.run("verify_checksum", test_verify_checksum)
@@ -169,29 +173,29 @@ def run_e2e(db_name):
     # --- Directory Operations ---
     def test_list_directory():
         runner.reset_db()
-        write_file(0, "/a.txt", b"a")
-        write_file(0, "/dir/b.txt", b"b")
-        write_file(0, "/dir/sub/c.txt", b"c")
-        result = list_directory(0, "/")
+        write_file(DEFAULT_NAMESPACE_ID, "/a.txt", b"a")
+        write_file(DEFAULT_NAMESPACE_ID, "/dir/b.txt", b"b")
+        write_file(DEFAULT_NAMESPACE_ID, "/dir/sub/c.txt", b"c")
+        result = list_directory(DEFAULT_NAMESPACE_ID, "/")
         assert sorted(result) == ["a.txt", "dir"]
-        result = list_directory(0, "/dir")
+        result = list_directory(DEFAULT_NAMESPACE_ID, "/dir")
         assert sorted(result) == ["b.txt", "sub"]
 
     runner.run("list_directory", test_list_directory)
 
     def test_exists():
         runner.reset_db()
-        write_file(0, "/dir/file.txt", b"data")
-        assert file_exists(0, "/dir/file.txt")
-        assert file_exists(0, "/dir")
-        assert not file_exists(0, "/nonexistent")
+        write_file(DEFAULT_NAMESPACE_ID, "/dir/file.txt", b"data")
+        assert file_exists(DEFAULT_NAMESPACE_ID, "/dir/file.txt")
+        assert file_exists(DEFAULT_NAMESPACE_ID, "/dir")
+        assert not file_exists(DEFAULT_NAMESPACE_ID, "/nonexistent")
 
     runner.run("exists", test_exists)
 
     def test_info():
         runner.reset_db()
-        write_file(0, "/info.txt", b"hello")
-        info = get_file_info(0, "/info.txt")
+        write_file(DEFAULT_NAMESPACE_ID, "/info.txt", b"hello")
+        info = get_file_info(DEFAULT_NAMESPACE_ID, "/info.txt")
         assert info["type"] == "file"
         assert info["size"] == 5
 
@@ -200,48 +204,52 @@ def run_e2e(db_name):
     # --- Delete ---
     def test_delete():
         runner.reset_db()
-        write_file(0, "/del.txt", b"data")
-        delete_file(0, "/del.txt")
-        assert not file_exists(0, "/del.txt")
+        write_file(DEFAULT_NAMESPACE_ID, "/del.txt", b"data")
+        delete_file(DEFAULT_NAMESPACE_ID, "/del.txt")
+        assert not file_exists(DEFAULT_NAMESPACE_ID, "/del.txt")
         assert StorageBlock.objects.filter(is_free=True).count() == 1
 
     runner.run("delete", test_delete)
 
     def test_delete_recursive():
         runner.reset_db()
-        write_file(0, "/dir/a.txt", b"a")
-        write_file(0, "/dir/b.txt", b"b")
-        delete_file(0, "/dir", recursive=True)
-        assert not file_exists(0, "/dir")
+        write_file(DEFAULT_NAMESPACE_ID, "/dir/a.txt", b"a")
+        write_file(DEFAULT_NAMESPACE_ID, "/dir/b.txt", b"b")
+        delete_file(DEFAULT_NAMESPACE_ID, "/dir", recursive=True)
+        assert not file_exists(DEFAULT_NAMESPACE_ID, "/dir")
 
     runner.run("delete_recursive", test_delete_recursive)
 
     # --- Copy & Move ---
     def test_copy():
         runner.reset_db()
-        write_file(0, "/src.txt", b"copy me")
-        copy_file(0, "/src.txt", "/dst.txt")
-        assert read_file(0, "/dst.txt") == b"copy me"
-        assert read_file(0, "/src.txt") == b"copy me"
+        write_file(DEFAULT_NAMESPACE_ID, "/src.txt", b"copy me")
+        copy_file(DEFAULT_NAMESPACE_ID, "/src.txt", "/dst.txt")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/dst.txt") == b"copy me"
+        assert read_file(DEFAULT_NAMESPACE_ID, "/src.txt") == b"copy me"
 
     runner.run("copy", test_copy)
 
     def test_move():
         runner.reset_db()
-        write_file(0, "/old.txt", b"move me")
-        move_file(0, "/old.txt", "/new.txt")
-        assert read_file(0, "/new.txt") == b"move me"
-        assert not file_exists(0, "/old.txt")
+        write_file(DEFAULT_NAMESPACE_ID, "/old.txt", b"move me")
+        move_file(DEFAULT_NAMESPACE_ID, "/old.txt", "/new.txt")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/new.txt") == b"move me"
+        assert not file_exists(DEFAULT_NAMESPACE_ID, "/old.txt")
 
     runner.run("move", test_move)
 
     # --- Namespace Isolation ---
     def test_namespace_isolation():
         runner.reset_db()
-        write_file(0, "/ns.txt", b"ns0")
-        write_file(1, "/ns.txt", b"ns1")
-        assert read_file(0, "/ns.txt") == b"ns0"
-        assert read_file(1, "/ns.txt") == b"ns1"
+        Namespace.objects.get_or_create(
+            id=SECONDARY_NAMESPACE_ID,
+            defaults={"name": "secondary", "description": "Secondary test namespace"},
+        )
+        write_file(DEFAULT_NAMESPACE_ID, "/ns.txt", b"default")
+        write_file(SECONDARY_NAMESPACE_ID, "/ns.txt", b"secondary")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/ns.txt") == b"default"
+        assert read_file(SECONDARY_NAMESPACE_ID, "/ns.txt") == b"secondary"
 
     runner.run("namespace_isolation", test_namespace_isolation)
 
@@ -249,25 +257,25 @@ def run_e2e(db_name):
     def test_path_validation():
         runner.reset_db()
         try:
-            write_file(0, "../etc/passwd", b"bad")
+            write_file(DEFAULT_NAMESPACE_ID, "../etc/passwd", b"bad")
             assert False, "Should have raised PathValidationError"
         except PathValidationError:
             pass
 
     runner.run("path_validation", test_path_validation)
 
-    # --- Block Pool Reuse ---
-    def test_block_reuse():
+    # --- Free Block Retention ---
+    def test_free_block_retention():
         runner.reset_db()
-        write_file(0, "/reuse.txt", b"data")
-        delete_file(0, "/reuse.txt")
+        write_file(DEFAULT_NAMESPACE_ID, "/reuse.txt", b"data")
+        delete_file(DEFAULT_NAMESPACE_ID, "/reuse.txt")
         free_before = StorageBlock.objects.filter(is_free=True).count()
         assert free_before == 1
-        write_file(0, "/reuse2.txt", b"new data")
+        write_file(DEFAULT_NAMESPACE_ID, "/reuse2.txt", b"new data")
         free_after = StorageBlock.objects.filter(is_free=True).count()
-        assert free_after == 0
+        assert free_after == 1
 
-    runner.run("block_reuse", test_block_reuse)
+    runner.run("free_block_retention", test_free_block_retention)
 
     # --- fsspec Interface ---
     def test_fsspec_roundtrip():
@@ -296,8 +304,8 @@ def run_e2e(db_name):
     # --- Unicode ---
     def test_unicode_path():
         runner.reset_db()
-        write_file(0, "/日本語/ファイル.txt", b"unicode content")
-        assert read_file(0, "/日本語/ファイル.txt") == b"unicode content"
+        write_file(DEFAULT_NAMESPACE_ID, "/日本語/ファイル.txt", b"unicode content")
+        assert read_file(DEFAULT_NAMESPACE_ID, "/日本語/ファイル.txt") == b"unicode content"
 
     runner.run("unicode_path", test_unicode_path)
 
@@ -305,11 +313,11 @@ def run_e2e(db_name):
     def test_block_size_coexistence():
         runner.reset_db()
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
-            write_file(0, "/small_bs.txt", b"A" * 250)
+            write_file(DEFAULT_NAMESPACE_ID, "/small_bs.txt", b"A" * 250)
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=256 * 1024):
-            write_file(0, "/large_bs.txt", b"B" * 250)
-        assert read_file(0, "/small_bs.txt") == b"A" * 250
-        assert read_file(0, "/large_bs.txt") == b"B" * 250
+            write_file(DEFAULT_NAMESPACE_ID, "/large_bs.txt", b"B" * 250)
+        assert read_file(DEFAULT_NAMESPACE_ID, "/small_bs.txt") == b"A" * 250
+        assert read_file(DEFAULT_NAMESPACE_ID, "/large_bs.txt") == b"B" * 250
         small = FileNode.objects.get(path="/small_bs.txt")
         large = FileNode.objects.get(path="/large_bs.txt")
         assert small.block_size == 100
@@ -335,7 +343,7 @@ def run_e2e(db_name):
         def writer(thread_id):
             try:
                 for i in range(n_files_per_thread):
-                    write_file(0, f"/conc/t{thread_id}/file{i}.txt", f"thread {thread_id} file {i}".encode())
+                    write_file(DEFAULT_NAMESPACE_ID, f"/conc/t{thread_id}/file{i}.txt", f"thread {thread_id} file {i}".encode())
             except Exception as e:
                 errors.append((thread_id, e))
 
@@ -349,10 +357,10 @@ def run_e2e(db_name):
         # Verify all files exist and have correct content
         for t in range(n_threads):
             for i in range(n_files_per_thread):
-                data = read_file(0, f"/conc/t{t}/file{i}.txt")
+                data = read_file(DEFAULT_NAMESPACE_ID, f"/conc/t{t}/file{i}.txt")
                 assert data == f"thread {t} file {i}".encode(), f"Data mismatch: t={t} i={i}"
 
-        total = FileNode.objects.filter(namespace=0, path__startswith="/conc/").count()
+        total = FileNode.objects.filter(namespace=DEFAULT_NAMESPACE_ID, path__startswith="/conc/").count()
         assert total == n_threads * n_files_per_thread
 
     if not skip_concurrency:
@@ -361,7 +369,7 @@ def run_e2e(db_name):
     def test_concurrent_write_same_file():
         """Multiple threads writing to the same file — one wins, others may get FileConflictError."""
         runner.reset_db()
-        write_file(0, "/conc_same.txt", b"initial")
+        write_file(DEFAULT_NAMESPACE_ID, "/conc_same.txt", b"initial")
 
         n_threads = 8
         results = {"success": 0, "conflict": 0, "other_error": 0}
@@ -369,7 +377,7 @@ def run_e2e(db_name):
 
         def writer(thread_id):
             try:
-                write_file(0, "/conc_same.txt", f"written by thread {thread_id}".encode())
+                write_file(DEFAULT_NAMESPACE_ID, "/conc_same.txt", f"written by thread {thread_id}".encode())
                 with lock:
                     results["success"] += 1
             except FileConflictError:
@@ -388,7 +396,7 @@ def run_e2e(db_name):
         assert results["success"] >= 1, f"No successful writes: {results}"
         assert results["other_error"] == 0, f"Unexpected errors: {results}"
         # File should exist with valid content
-        data = read_file(0, "/conc_same.txt")
+        data = read_file(DEFAULT_NAMESPACE_ID, "/conc_same.txt")
         assert data.startswith(b"written by thread ")
 
     if not skip_concurrency:
@@ -399,7 +407,7 @@ def run_e2e(db_name):
         runner.reset_db()
         # Pre-populate files for reading
         for i in range(20):
-            write_file(0, f"/conc_rw/read{i}.txt", f"read data {i}".encode())
+            write_file(DEFAULT_NAMESPACE_ID, f"/conc_rw/read{i}.txt", f"read data {i}".encode())
 
         errors = []
         writer_id_counter = [0]
@@ -408,7 +416,7 @@ def run_e2e(db_name):
         def reader():
             try:
                 for i in range(20):
-                    data = read_file(0, f"/conc_rw/read{i}.txt")
+                    data = read_file(DEFAULT_NAMESPACE_ID, f"/conc_rw/read{i}.txt")
                     assert data == f"read data {i}".encode()
             except Exception as e:
                 errors.append(("reader", e))
@@ -419,7 +427,7 @@ def run_e2e(db_name):
                 writer_id_counter[0] += 1
             try:
                 for i in range(20):
-                    write_file(0, f"/conc_rw/w{wid}/file{i}.txt", f"write data {wid}-{i}".encode())
+                    write_file(DEFAULT_NAMESPACE_ID, f"/conc_rw/w{wid}/file{i}.txt", f"write data {wid}-{i}".encode())
             except Exception as e:
                 errors.append(("writer", e))
 
@@ -441,7 +449,7 @@ def run_e2e(db_name):
         """Delete and list operations running concurrently."""
         runner.reset_db()
         for i in range(50):
-            write_file(0, f"/conc_dl/file{i}.txt", b"data")
+            write_file(DEFAULT_NAMESPACE_ID, f"/conc_dl/file{i}.txt", b"data")
 
         errors = []
 
@@ -449,7 +457,7 @@ def run_e2e(db_name):
             try:
                 for i in range(50):
                     try:
-                        delete_file(0, f"/conc_dl/file{i}.txt")
+                        delete_file(DEFAULT_NAMESPACE_ID, f"/conc_dl/file{i}.txt")
                     except FileNotFoundError:
                         pass  # Already deleted by another thread or race
             except Exception as e:
@@ -458,7 +466,7 @@ def run_e2e(db_name):
         def lister():
             try:
                 for _ in range(10):
-                    list_directory(0, "/conc_dl")
+                    list_directory(DEFAULT_NAMESPACE_ID, "/conc_dl")
             except Exception as e:
                 errors.append(("lister", e))
 
@@ -479,19 +487,19 @@ def run_e2e(db_name):
         """If block allocation fails mid-write, no partial data should remain.
         Simulate by writing a file that exceeds MAX_FILE_SIZE after initial setup."""
         runner.reset_db()
-        write_file(0, "/tx/existing.txt", b"should survive")
+        write_file(DEFAULT_NAMESPACE_ID, "/tx/existing.txt", b"should survive")
         initial_block_count = StorageBlock.objects.filter(is_free=False).count()
 
         with override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=10):
             try:
-                write_file(0, "/tx/toobig.txt", b"x" * 20)
+                write_file(DEFAULT_NAMESPACE_ID, "/tx/toobig.txt", b"x" * 20)
             except FileTooLargeError:
                 pass
 
         # No partial file should exist
-        assert not file_exists(0, "/tx/toobig.txt"), "Partial file should not exist"
+        assert not file_exists(DEFAULT_NAMESPACE_ID, "/tx/toobig.txt"), "Partial file should not exist"
         # Existing file untouched
-        assert read_file(0, "/tx/existing.txt") == b"should survive"
+        assert read_file(DEFAULT_NAMESPACE_ID, "/tx/existing.txt") == b"should survive"
         # No leaked blocks
         assert StorageBlock.objects.filter(is_free=False).count() == initial_block_count
 
@@ -503,7 +511,7 @@ def run_e2e(db_name):
         if skip_concurrency:
             return
         runner.reset_db()
-        write_file(0, "/tx/overwrite.txt", b"original content")
+        write_file(DEFAULT_NAMESPACE_ID, "/tx/overwrite.txt", b"original content")
 
         # Simulate conflict by bumping version OUTSIDE the transaction, then
         # attempting to overwrite. We need the version bump to happen between
@@ -516,7 +524,7 @@ def run_e2e(db_name):
         def stale_get(**kwargs):
             obj = real_get(**kwargs)
             if kwargs.get("path") == "/tx/overwrite.txt" or \
-               (kwargs.get("namespace") == 0 and kwargs.get("path") == "/tx/overwrite.txt"):
+               (kwargs.get("namespace") == DEFAULT_NAMESPACE_ID and kwargs.get("path") == "/tx/overwrite.txt"):
                 # Bump version using a separate connection to avoid transaction rollback
                 with connection.cursor() as cursor:
                     cursor.execute(
@@ -528,13 +536,13 @@ def run_e2e(db_name):
         conflict_raised = False
         with patch.object(FileNode.objects, "get", side_effect=stale_get):
             try:
-                write_file(0, "/tx/overwrite.txt", b"new content that should fail")
+                write_file(DEFAULT_NAMESPACE_ID, "/tx/overwrite.txt", b"new content that should fail")
             except FileConflictError:
                 conflict_raised = True
 
         assert conflict_raised, "FileConflictError should have been raised"
         # File should still exist
-        assert file_exists(0, "/tx/overwrite.txt"), "File should still exist after conflict"
+        assert file_exists(DEFAULT_NAMESPACE_ID, "/tx/overwrite.txt"), "File should still exist after conflict"
 
     if not skip_concurrency:
         runner.run("tx_atomicity_overwrite_rollback", test_tx_atomicity_overwrite_rollback)
@@ -549,7 +557,7 @@ def run_e2e(db_name):
 
         def creator(tid):
             try:
-                create_file_exclusive(0, "/tx/race.txt", f"by thread {tid}".encode())
+                create_file_exclusive(DEFAULT_NAMESPACE_ID, "/tx/race.txt", f"by thread {tid}".encode())
                 with lock:
                     results["created"] += 1
             except FileExistsError:
@@ -568,7 +576,7 @@ def run_e2e(db_name):
         assert results["other_error"] == 0, f"No unexpected errors: {results}"
         assert results["exists_error"] == 7, f"Others should get FileExistsError: {results}"
         # File should have valid content
-        data = read_file(0, "/tx/race.txt")
+        data = read_file(DEFAULT_NAMESPACE_ID, "/tx/race.txt")
         assert data.startswith(b"by thread ")
 
     if not skip_concurrency:
@@ -582,7 +590,7 @@ def run_e2e(db_name):
             return
         runner.reset_db()
         data = b"A" * 1000
-        write_file(0, "/tx/delread.txt", data)
+        write_file(DEFAULT_NAMESPACE_ID, "/tx/delread.txt", data)
 
         read_results = {"complete": 0, "not_found": 0, "partial": 0, "error": 0}
         lock = threading.Lock()
@@ -593,7 +601,7 @@ def run_e2e(db_name):
                 barrier.wait()
                 for _ in range(20):
                     try:
-                        result = read_file(0, "/tx/delread.txt")
+                        result = read_file(DEFAULT_NAMESPACE_ID, "/tx/delread.txt")
                         with lock:
                             if result == data:
                                 read_results["complete"] += 1
@@ -614,7 +622,7 @@ def run_e2e(db_name):
             try:
                 barrier.wait()
                 time.sleep(0.001)  # Slight delay to let reader start
-                delete_file(0, "/tx/delread.txt")
+                delete_file(DEFAULT_NAMESPACE_ID, "/tx/delread.txt")
             except Exception:
                 pass
 
@@ -640,7 +648,7 @@ def run_e2e(db_name):
         if skip_concurrency:
             return
         runner.reset_db()
-        write_file(0, "/tx/consist.txt", b"init")
+        write_file(DEFAULT_NAMESPACE_ID, "/tx/consist.txt", b"init")
 
         errors = []
         lock = threading.Lock()
@@ -649,7 +657,7 @@ def run_e2e(db_name):
             for i in range(20):
                 try:
                     payload = f"t{tid}-v{i}-".encode() + bytes(range(256))
-                    write_file(0, "/tx/consist.txt", payload)
+                    write_file(DEFAULT_NAMESPACE_ID, "/tx/consist.txt", payload)
                 except FileConflictError:
                     pass  # Expected under contention
                 except Exception as e:
@@ -665,7 +673,7 @@ def run_e2e(db_name):
 
         # After all writes complete, verify final state is consistent
         import hashlib
-        node = FileNode.objects.get(namespace=0, path="/tx/consist.txt")
+        node = FileNode.objects.get(namespace=DEFAULT_NAMESPACE_ID, path="/tx/consist.txt")
         blocks = list(
             FileBlock.objects.filter(file=node)
             .select_related("block")
@@ -702,10 +710,10 @@ def run_e2e(db_name):
             try:
                 for i in range(30):
                     path = f"/tx/churn/t{tid}/f{i}.txt"
-                    write_file(0, path, f"churn-{tid}-{i}".encode() * 10)
+                    write_file(DEFAULT_NAMESPACE_ID, path, f"churn-{tid}-{i}".encode() * 10)
                     if i % 3 == 0:
                         try:
-                            delete_file(0, path)
+                            delete_file(DEFAULT_NAMESPACE_ID, path)
                         except FileNotFoundError:
                             pass
             except Exception as e:
@@ -753,7 +761,7 @@ def run_e2e(db_name):
         runner.reset_db()
         n = 20
         for i in range(n):
-            write_file(0, f"/tx/move/src{i}.txt", f"file {i}".encode())
+            write_file(DEFAULT_NAMESPACE_ID, f"/tx/move/src{i}.txt", f"file {i}".encode())
 
         errors = []
 
@@ -761,7 +769,7 @@ def run_e2e(db_name):
             try:
                 for i in range(tid, n, 4):  # Each thread handles a subset
                     try:
-                        move_file(0, f"/tx/move/src{i}.txt", f"/tx/move/dst{i}.txt")
+                        move_file(DEFAULT_NAMESPACE_ID, f"/tx/move/src{i}.txt", f"/tx/move/dst{i}.txt")
                     except (FileNotFoundError, FileExistsError):
                         pass  # Race with another mover
             except Exception as e:
@@ -776,13 +784,13 @@ def run_e2e(db_name):
 
         # Total files should still be n (some at src, some at dst)
         total = FileNode.objects.filter(
-            namespace=0, path__startswith="/tx/move/"
+            namespace=DEFAULT_NAMESPACE_ID, path__startswith="/tx/move/"
         ).count()
         assert total == n, f"Expected {n} files, found {total}"
 
         # No path should appear more than once
         paths = list(
-            FileNode.objects.filter(namespace=0, path__startswith="/tx/move/")
+            FileNode.objects.filter(namespace=DEFAULT_NAMESPACE_ID, path__startswith="/tx/move/")
             .values_list("path", flat=True)
         )
         assert len(paths) == len(set(paths)), f"Duplicate paths found: {paths}"
@@ -802,7 +810,7 @@ def run_e2e(db_name):
 
         # Use exclusive paths per thread to avoid conflict, then compare totals
         for t in range(n_threads):
-            write_file(0, f"/tx/append/log{t}.txt", b"")
+            write_file(DEFAULT_NAMESPACE_ID, f"/tx/append/log{t}.txt", b"")
 
         errors = []
 
@@ -810,7 +818,7 @@ def run_e2e(db_name):
             try:
                 for i in range(n_appends):
                     marker = f"[t{tid}:i{i}]".encode().ljust(chunk_size, b".")
-                    append_file(0, f"/tx/append/log{tid}.txt", marker)
+                    append_file(DEFAULT_NAMESPACE_ID, f"/tx/append/log{tid}.txt", marker)
             except Exception as e:
                 errors.append(("appender", tid, e))
 
@@ -823,7 +831,7 @@ def run_e2e(db_name):
 
         # Each file should have exactly n_appends chunks
         for t in range(n_threads):
-            data = read_file(0, f"/tx/append/log{t}.txt")
+            data = read_file(DEFAULT_NAMESPACE_ID, f"/tx/append/log{t}.txt")
             expected_size = chunk_size * n_appends
             assert len(data) == expected_size, \
                 f"Thread {t}: expected {expected_size} bytes, got {len(data)}"

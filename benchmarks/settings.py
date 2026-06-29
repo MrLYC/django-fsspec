@@ -52,8 +52,9 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": os.path.join(
-                os.path.dirname(__file__), "bench.sqlite3"
+            "NAME": os.environ.get(
+                "DJANGO_FSSPEC_BENCH_SQLITE_NAME",
+                os.path.join(os.path.dirname(__file__), "bench.sqlite3"),
             ),
         }
     }
