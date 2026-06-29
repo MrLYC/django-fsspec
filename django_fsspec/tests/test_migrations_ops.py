@@ -1,3 +1,4 @@
+from django.db import connection
 from django.test import TestCase, override_settings
 
 from django_fsspec.migrations_ops import RechunkOperation
@@ -75,9 +76,10 @@ class TestRechunkOperation(TestCase):
 
     def _do_rechunk(self, new_block_size):
         """Use the actual RechunkOperation class via database_forwards."""
-        from django.apps import apps
-
         op = RechunkOperation(new_block_size=new_block_size)
+
+        class MockSchemaEditor:
+            connection = connection
 
         # Create a mock state that provides get_model
         class MockState:
@@ -90,7 +92,7 @@ class TestRechunkOperation(TestCase):
                         "StorageBlock": StorageBlock,
                     }[model_name]
 
-        op.database_forwards("django_fsspec", None, MockState(), MockState())
+        op.database_forwards("django_fsspec", MockSchemaEditor(), MockState(), MockState())
 
 
 class TestRechunkOperationMeta(TestCase):
@@ -113,6 +115,9 @@ class TestRechunkOperationMeta(TestCase):
         op = RechunkOperation(new_block_size=64 * 1024)
         assert op.reduces_to_sql is False
 
-    def test_reversible(self):
-        op = RechunkOperation(new_block_size=64 * 1024)
-        assert op.reversible is False
+    def test_invalid_block_size_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            RechunkOperation(new_block_size=0)
+

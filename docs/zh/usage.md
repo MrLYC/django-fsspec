@@ -95,7 +95,7 @@ curl -i -u user:password http://localhost:8000/webdav/1/docs/readme.txt
 
 - 必须以 `/` 开头
 - 禁止 `\x00` 和控制字符 `\x01-\x1f`
-- 禁止 `..` 作为路径分段
+- 禁止 `.` 或 `..` 作为路径分段
 - 禁止连续 `/`
 - 禁止尾部 `/`（根路径 `/` 除外，仅用于 ls）
 - 自动做 Unicode NFC 归一化

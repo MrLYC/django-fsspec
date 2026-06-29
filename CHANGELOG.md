@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Mark package metadata as Production/Stable and align supported Django versions with Python 3.11+ by requiring Django 4.2 or newer.
+- Disable free block reuse on the write path; new writes now always allocate fresh storage blocks, and `fsspec_gc` is responsible for permanently deleting free blocks.
+- Clarify that namespaces provide path partitioning, not an authorization boundary for direct fsspec API callers.
+- Reject `.` path segments in addition to `..` to avoid canonicalization ambiguity.
+
+### Fixed
+- Route fsspec append mode through `append_file()` instead of rewriting stale preloaded file contents.
+- Make `fsspec_fsck` fail with `CommandError` when corruption is detected and scope block checks to `--namespace` when provided.
+- Convert the test-only rechunk migration into a no-op compatibility migration so new installs do not rechunk data and existing migration graphs keep the `0002` node.
+- Validate `RechunkOperation(new_block_size=...)` and use the active migration database alias.
+
 ## [0.2.0] - 2026-06-28
 
 ### Fixed

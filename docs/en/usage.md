@@ -95,7 +95,7 @@ Supported methods: `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL
 
 - Must start with `/`
 - No null bytes or control characters (`\x00`-`\x1f`)
-- No `..` path segments
+- No `.` or `..` path segments
 - No consecutive slashes (`//`)
 - No trailing slash (except `/` for ls)
 - Unicode NFC normalization applied automatically

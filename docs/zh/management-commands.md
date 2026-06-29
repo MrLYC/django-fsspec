@@ -6,7 +6,7 @@
 # 清理所有空闲块
 python manage.py fsspec_gc
 
-# 保留 100 个空闲块在池中
+# 保留 100 个空闲块用于检查
 python manage.py fsspec_gc --keep 100
 
 # 预览，不实际删除

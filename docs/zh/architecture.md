@@ -10,7 +10,7 @@
 
 | 模块 | 职责 |
 |------|------|
-| `fs.py` | `DjangoFileSystem` fsspec 适配器、namespace 隔离、目录/文件 API、fsspec 事务集成 |
+| `fs.py` | `DjangoFileSystem` fsspec 适配器、namespace 分区、目录/文件 API、fsspec 事务集成 |
 | `buffer.py` | `DjangoFile` 与 `AbstractBufferedFile` 的桥接、缓冲上传、追加写初始化、范围读取 |
 | `operations.py` | 事务化文件原语：校验、切块、分配/释放块、读取、列目录、复制、移动、删除 |
 | `models.py` | ORM 表结构和存储配置 helper |
@@ -89,11 +89,12 @@ FileNode.objects.filter(path__startswith=prefix).annotate(
 4. `operations.read_file(..., verify_checksum=True)` 可以校验块级和文件级
    SHA-256 checksum。
 
-## 块池复用
+## 空闲块
 
 删除、覆盖、递归删除目录或 rechunk 时，旧块会标记为 `is_free=True`，对应的
-`FileBlock` 映射会被删除。新写入优先用批量 `UPDATE` 抢占空闲块；空闲池不足
-或发生竞争时，再创建新的 `StorageBlock`。
+`FileBlock` 映射会被删除。新写入始终创建新的 `StorageBlock` 记录；这样避免
+依赖不同数据库的行锁语义，优先保证写路径正确性。检查或保留窗口结束后，可用
+`fsspec_gc` 永久删除空闲块。
 
 ## 乐观锁
 
@@ -125,7 +126,7 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 |-------------|------|
 | `fsspec_stats` | 输出 namespace 数、文件数量/大小、已用/空闲块、映射数量 |
 | `fsspec_fsck` | 校验块 checksum、块大小、文件 checksum、文件大小、序号连续性，以及指向空闲块的映射 |
-| `fsspec_gc` | 删除空闲 `StorageBlock`，可选择保留一定数量作为复用池 |
+| `fsspec_gc` | 删除空闲 `StorageBlock`，可选择保留近期空闲记录用于检查 |
 | `check_block_size_consistency` | 当已存文件的 block size 和当前配置不一致时发出 Django warning |
 
 ## 性能基线
@@ -134,35 +135,34 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 
 ### 写入操作
 
-| 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
-|------|--------|-----------|-----------|--------|-------|-----------|
-| 写入小文件 (100B) | 2.22ms / 450 ops/s | 3.53ms / 283 ops/s | 4.43ms / 226 ops/s | 2.89ms / 346 ops/s | 3.00ms / 333 ops/s | 3.20ms / 313 ops/s |
-| 写入中文件 (10KB) | 2.31ms / 433 ops/s | 3.77ms / 265 ops/s | 4.90ms / 204 ops/s | 3.00ms / 334 ops/s | 3.11ms / 321 ops/s | 3.61ms / 277 ops/s |
-| 写入大文件 (1MB) | 6.63ms / 151 ops/s | 22.64ms / 44 ops/s | 28.03ms / 36 ops/s | 28.26ms / 35 ops/s | 24.00ms / 42 ops/s | 11.30ms / 88 ops/s |
-| 覆盖写 | 3.76ms / 266 ops/s | 7.30ms / 137 ops/s | 9.14ms / 109 ops/s | 6.32ms / 158 ops/s | 6.27ms / 159 ops/s | 7.17ms / 139 ops/s |
+| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
+|------|--------|-----------|-------|-----------|
+| 写入小文件 (100B) | 2.22ms / 450 ops/s | 4.43ms / 226 ops/s | 3.00ms / 333 ops/s | 3.20ms / 313 ops/s |
+| 写入中文件 (10KB) | 2.31ms / 433 ops/s | 4.90ms / 204 ops/s | 3.11ms / 321 ops/s | 3.61ms / 277 ops/s |
+| 写入大文件 (1MB) | 6.63ms / 151 ops/s | 28.03ms / 36 ops/s | 24.00ms / 42 ops/s | 11.30ms / 88 ops/s |
+| 覆盖写 | 3.76ms / 266 ops/s | 9.14ms / 109 ops/s | 6.27ms / 159 ops/s | 7.17ms / 139 ops/s |
 
 ### 读取操作
 
-| 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
-|------|--------|-----------|-----------|--------|-------|-----------|
-| 读取小文件 (100B) | 1.19ms / 841 ops/s | 2.35ms / 426 ops/s | 2.43ms / 411 ops/s | 2.17ms / 460 ops/s | 2.32ms / 431 ops/s | 2.56ms / 390 ops/s |
-| 读取大文件 (1MB) | 1.67ms / 598 ops/s | 4.04ms / 248 ops/s | 4.48ms / 223 ops/s | 10.88ms / 92 ops/s | 7.77ms / 129 ops/s | 5.48ms / 183 ops/s |
-| 随机读 (seek+read) | 1.36ms / 738 ops/s | 2.99ms / 334 ops/s | 3.20ms / 312 ops/s | 4.70ms / 213 ops/s | 4.59ms / 218 ops/s | 3.69ms / 271 ops/s |
+| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
+|------|--------|-----------|-------|-----------|
+| 读取小文件 (100B) | 1.19ms / 841 ops/s | 2.43ms / 411 ops/s | 2.32ms / 431 ops/s | 2.56ms / 390 ops/s |
+| 读取大文件 (1MB) | 1.67ms / 598 ops/s | 4.48ms / 223 ops/s | 7.77ms / 129 ops/s | 5.48ms / 183 ops/s |
+| 随机读 (seek+read) | 1.36ms / 738 ops/s | 3.20ms / 312 ops/s | 4.59ms / 218 ops/s | 3.69ms / 271 ops/s |
 
 ### 目录和删除操作
 
-| 操作 | SQLite | MySQL 5.7 | MySQL 8.0 | PG 9.6 | PG 16 | Oracle 23 |
-|------|--------|-----------|-----------|--------|-------|-----------|
-| 列目录 (1000 文件) | 2.54ms / 394 ops/s | 8.04ms / 124 ops/s | 5.94ms / 168 ops/s | 4.06ms / 246 ops/s | 3.94ms / 254 ops/s | 5.97ms / 167 ops/s |
-| 列嵌套目录 (100 子目录) | 2.17ms / 460 ops/s | 5.46ms / 183 ops/s | 4.04ms / 247 ops/s | 3.90ms / 256 ops/s | 3.55ms / 282 ops/s | 3.56ms / 281 ops/s |
-| 删除 | 2.42ms / 413 ops/s | 4.55ms / 220 ops/s | 5.33ms / 188 ops/s | 3.59ms / 278 ops/s | 3.52ms / 284 ops/s | 3.73ms / 268 ops/s |
+| 操作 | SQLite | MySQL 8.0 | PG 16 | Oracle 23 |
+|------|--------|-----------|-------|-----------|
+| 列目录 (1000 文件) | 2.54ms / 394 ops/s | 5.94ms / 168 ops/s | 3.94ms / 254 ops/s | 5.97ms / 167 ops/s |
+| 列嵌套目录 (100 子目录) | 2.17ms / 460 ops/s | 4.04ms / 247 ops/s | 3.55ms / 282 ops/s | 3.56ms / 281 ops/s |
+| 删除 | 2.42ms / 413 ops/s | 5.33ms / 188 ops/s | 3.52ms / 284 ops/s | 3.73ms / 268 ops/s |
 
 ### 关键发现
 
 - **SQLite** 全场景最快（无网络开销）
-- **MySQL 5.7 vs 8.0**：5.7 在读写上更快；8.0 在目录列表上快约 50%（查询优化器改进）
-- **PG 9.6 vs 16**：PG 16 在大文件读取上快约 30%；其他操作接近
-- **PostgreSQL** 小文件写入性能优秀，但大文件读取较慢（TOAST 开销）
+- **MySQL 8.0** 大文件写入较慢，但仍处在目标负载范围内
+- **PostgreSQL 16** 小文件写入性能优秀，但大文件读取较慢（TOAST 开销）
 - **Oracle** 延迟稳定一致
 - 所有数据库都能良好支持目标场景（3 万小文件）——即使最慢的写入（MySQL 8.0 大文件 36 ops/s）也能在约 14 分钟内写完 3 万文件
 

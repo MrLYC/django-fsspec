@@ -26,53 +26,24 @@ def _chunk_data(data: bytes, block_size: int) -> list[bytes]:
 
 
 def _allocate_blocks(chunks: list[bytes]) -> list[StorageBlock]:
-    """Allocate storage blocks for chunks. Uses free block pool with optimistic
-    locking, falls back to creating new blocks on contention."""
-    need = len(chunks)
-    if need == 0:
-        return []
+    """Allocate storage blocks for chunks.
 
-    # Try to grab free blocks
-    free_ids = list(
-        StorageBlock.objects.filter(is_free=True)
-        .values_list("id", flat=True)[: need * 2]
-    )
-
-    acquired_blocks = []
-    if free_ids:
-        candidate_ids = free_ids[:need]
-        acquired_count = StorageBlock.objects.filter(
-            id__in=candidate_ids, is_free=True
-        ).update(is_free=False)
-
-        if acquired_count > 0:
-            acquired_blocks = list(
-                StorageBlock.objects.filter(
-                    id__in=candidate_ids, is_free=False
-                )[:acquired_count]
-            )
-
-    # Write data into acquired (reused) blocks
-    for block, chunk in zip(acquired_blocks, chunks):
-        block.data = chunk
-        block.size = len(chunk)
-        block.checksum = _compute_checksum(chunk)
-        block.save(update_fields=["data", "size", "checksum"])
-
-    # Create new blocks for any shortfall (with data inline to avoid PK issues)
-    shortfall = need - len(acquired_blocks)
-    if shortfall > 0:
-        remaining_chunks = chunks[len(acquired_blocks):]
-        for chunk in remaining_chunks:
-            block = StorageBlock.objects.create(
+    Always create new blocks instead of reusing the free block pool. Reusing free
+    blocks safely across all supported databases requires row-locking semantics
+    that are not uniformly available; correctness is more important than storage
+    reuse on the write path. Free blocks can be permanently removed by GC.
+    """
+    blocks = []
+    for chunk in chunks:
+        blocks.append(
+            StorageBlock.objects.create(
                 data=chunk,
                 size=len(chunk),
                 checksum=_compute_checksum(chunk),
                 is_free=False,
             )
-            acquired_blocks.append(block)
-
-    return acquired_blocks
+        )
+    return blocks
 
 
 def _release_blocks(file_node: FileNode):
@@ -165,7 +136,6 @@ def write_file(
 
         if file_node is not None:
             old_version = file_node.version
-            _release_blocks(file_node)
 
             # Optimistic lock: UPDATE ... WHERE version = old_version
             updated = FileNode.objects.filter(
@@ -181,6 +151,7 @@ def write_file(
                 raise FileConflictError(
                     f"File was modified by another process: {path}"
                 )
+            _release_blocks(file_node)
             file_node.refresh_from_db()
         else:
             file_node = FileNode.objects.create(
@@ -283,7 +254,6 @@ def append_file(
                 )
 
             old_version = file_node.version
-            _release_blocks(file_node)
 
             chunks = _chunk_data(new_data, block_size)
             file_checksum = _compute_checksum(new_data)
@@ -301,6 +271,7 @@ def append_file(
                 raise FileConflictError(
                     f"File was modified by another process: {path}"
                 )
+            _release_blocks(file_node)
             file_node.refresh_from_db()
         else:
             # Create new file
@@ -526,20 +497,21 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
         raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
 
     with transaction.atomic():
-        nodes_to_delete = children
+        nodes_to_delete_qs = children
         if file_node is not None:
-            nodes_to_delete = FileNode.objects.filter(pk=file_node.pk) | children
+            nodes_to_delete_qs = FileNode.objects.filter(pk=file_node.pk) | children
 
+        node_ids = list(nodes_to_delete_qs.values_list("pk", flat=True))
         block_ids = list(
             FileBlock.objects.filter(
-                file__in=nodes_to_delete,
+                file_id__in=node_ids,
                 file__node_type=NODE_TYPE_FILE,
             ).values_list("block_id", flat=True)
         )
         if block_ids:
             StorageBlock.objects.filter(id__in=block_ids).update(is_free=True)
-        FileBlock.objects.filter(file__in=nodes_to_delete).delete()
-        nodes_to_delete.delete()
+        FileBlock.objects.filter(file_id__in=node_ids).delete()
+        FileNode.objects.filter(pk__in=node_ids).delete()
 
 
 def list_directory(namespace: int, path: str) -> list[str]:

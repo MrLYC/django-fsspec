@@ -6,7 +6,7 @@ Clean up free storage blocks:
 
 ```bash
 python manage.py fsspec_gc              # Delete all free blocks
-python manage.py fsspec_gc --keep 100   # Keep 100 free blocks in pool
+python manage.py fsspec_gc --keep 100   # Keep 100 free blocks for inspection
 python manage.py fsspec_gc --dry-run    # Preview without deleting
 ```
 

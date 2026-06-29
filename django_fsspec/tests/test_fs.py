@@ -44,6 +44,21 @@ class TestDjangoFileSystem(TestCase):
             f.write(b"line2\n")
         assert self.fs.cat("/log.txt") == b"line1\nline2\n"
 
+    def test_append_two_open_handles_preserves_both_appends(self):
+        with self.fs.open("/log.txt", "wb") as f:
+            f.write(b"start\n")
+
+        first = self.fs.open("/log.txt", "ab")
+        second = self.fs.open("/log.txt", "ab")
+        try:
+            first.write(b"first\n")
+            second.write(b"second\n")
+        finally:
+            first.close()
+            second.close()
+
+        assert self.fs.cat("/log.txt") == b"start\nfirst\nsecond\n"
+
     def test_append_new_file(self):
         with self.fs.open("/new.txt", "ab") as f:
             f.write(b"data")

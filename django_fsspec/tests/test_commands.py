@@ -1,6 +1,7 @@
 from io import StringIO
 
-from django.core.management import call_command
+import pytest
+from django.core.management import CommandError, call_command
 from django.test import TestCase
 
 from django_fsspec.models import FileBlock, FileNode, StorageBlock
@@ -70,7 +71,8 @@ class TestFsspecFsck(TestCase):
         block.save(update_fields=["checksum"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "checksum mismatch" in out.getvalue()
 
     def test_fsck_corrupted_block_size(self):
@@ -80,7 +82,8 @@ class TestFsspecFsck(TestCase):
         block.save(update_fields=["size"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "size mismatch" in out.getvalue()
 
     def test_fsck_corrupted_file_checksum(self):
@@ -90,7 +93,8 @@ class TestFsspecFsck(TestCase):
         node.save(update_fields=["checksum"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "checksum mismatch" in out.getvalue()
 
     def test_fsck_corrupted_file_size(self):
@@ -100,7 +104,8 @@ class TestFsspecFsck(TestCase):
         node.save(update_fields=["size"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "size mismatch" in out.getvalue()
 
     def test_fsck_namespace_filter(self):
@@ -113,6 +118,39 @@ class TestFsspecFsck(TestCase):
         call_command("fsspec_fsck", "--namespace=1", stdout=out)
         assert "Checked 1 files" in out.getvalue()
 
+    def test_fsck_namespace_filter_ignores_other_namespace_block_corruption(self):
+        write_file(1, "/test0.txt", b"ns0")
+        from django_fsspec.models import Namespace
+        Namespace.objects.create(id=2, name="other")
+        write_file(2, "/test1.txt", b"ns2")
+
+        node = FileNode.objects.get(namespace_id=2, path="/test1.txt")
+        block = FileBlock.objects.get(file=node).block
+        block.checksum = "bad"
+        block.save(update_fields=["checksum"])
+
+        out = StringIO()
+        call_command("fsspec_fsck", "--namespace=1", stdout=out)
+        assert "Checked 1 blocks" in out.getvalue()
+        assert "Checked 1 files" in out.getvalue()
+
+    def test_fsck_namespace_filter_reports_namespace_block_corruption(self):
+        write_file(1, "/test0.txt", b"ns0")
+        from django_fsspec.models import Namespace
+        Namespace.objects.create(id=2, name="other")
+        write_file(2, "/test1.txt", b"ns2")
+
+        node = FileNode.objects.get(namespace_id=1, path="/test0.txt")
+        block = FileBlock.objects.get(file=node).block
+        block.checksum = "bad"
+        block.save(update_fields=["checksum"])
+
+        out = StringIO()
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", "--namespace=1", stdout=out)
+        assert "Block" in out.getvalue()
+        assert "checksum mismatch" in out.getvalue()
+
     def test_fsck_orphaned_file_blocks(self):
         write_file(1, "/test.txt", b"data")
         # Corrupt: mark a used block as free without cleaning file blocks
@@ -121,7 +159,8 @@ class TestFsspecFsck(TestCase):
         block.save(update_fields=["is_free"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "orphaned" in out.getvalue().lower() or "free storage blocks" in out.getvalue()
 
     def test_fsck_non_contiguous_sequences(self):
@@ -133,7 +172,8 @@ class TestFsspecFsck(TestCase):
         fb.save(update_fields=["sequence"])
 
         out = StringIO()
-        call_command("fsspec_fsck", stdout=out)
+        with pytest.raises(CommandError):
+            call_command("fsspec_fsck", stdout=out)
         assert "non-contiguous" in out.getvalue()
 
 

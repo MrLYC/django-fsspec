@@ -16,12 +16,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-        django-version: ["3.2", "4.2", "5.2"]
-        exclude:
-          - python-version: "3.12"
-            django-version: "3.2"
-          - python-version: "3.13"
-            django-version: "3.2"
+        django-version: ["4.2", "5.2"]
 
     steps:
       - uses: actions/checkout@v4
@@ -93,8 +88,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mysql-version: "5.7"
-            django-version: "3.2"
+          - mysql-version: "8.0"
+            django-version: "4.2"
           - mysql-version: "8.0"
             django-version: "5.2"
     services:
@@ -145,13 +140,13 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: python benchmarks/run.py --db mysql --json benchmarks/results-mysql-${{ matrix.mysql-version }}.json
+        run: python benchmarks/run.py --db mysql-django-${{ matrix.django-version }} --json benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-mysql-${{ matrix.mysql-version }}
-          path: benchmarks/results-mysql-${{ matrix.mysql-version }}.json
+          name: benchmark-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}
+          path: benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
 
   e2e-postgres:
     needs: unit-test
@@ -160,8 +155,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pg-version: "9.6"
-            django-version: "3.2"
+          - pg-version: "16"
+            django-version: "4.2"
           - pg-version: "16"
             django-version: "5.2"
     services:
@@ -203,13 +198,13 @@ jobs:
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: python benchmarks/run.py --db postgres --json benchmarks/results-postgres-${{ matrix.pg-version }}.json
+        run: python benchmarks/run.py --db postgres-django-${{ matrix.django-version }} --json benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-postgres-${{ matrix.pg-version }}
-          path: benchmarks/results-postgres-${{ matrix.pg-version }}.json
+          name: benchmark-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}
+          path: benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
 
   e2e-oracle:
     needs: unit-test

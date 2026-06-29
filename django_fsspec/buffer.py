@@ -29,14 +29,6 @@ class DjangoFile(AbstractBufferedFile):
             if operations.file_exists(fs.namespace, path):
                 raise FileExistsError(f"File already exists: {path}")
 
-        # For append, read existing data
-        self._append_data = b""
-        if mode == "ab":
-            try:
-                self._append_data = operations.read_file(fs.namespace, path)
-            except FileNotFoundError:
-                pass
-
         if block_size is None:
             block_size = get_block_size()
 
@@ -52,7 +44,7 @@ class DjangoFile(AbstractBufferedFile):
 
     def _initiate_upload(self):
         """Prepare for upload. Called once before _upload_chunk."""
-        self._upload_buffer = self._append_data
+        self._upload_buffer = b""
 
     def _upload_chunk(self, final=False):
         """Buffer data; on final=True, write everything to the database."""
@@ -64,6 +56,10 @@ class DjangoFile(AbstractBufferedFile):
         if final:
             if self.mode == "xb":
                 operations.create_file_exclusive(
+                    self.fs.namespace, self.path, self._upload_buffer
+                )
+            elif self.mode == "ab":
+                operations.append_file(
                     self.fs.namespace, self.path, self._upload_buffer
                 )
             else:

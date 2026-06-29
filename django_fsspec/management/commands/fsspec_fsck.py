@@ -1,6 +1,6 @@
 import hashlib
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from django_fsspec.models import FileBlock, FileNode, StorageBlock
 
@@ -22,7 +22,14 @@ class Command(BaseCommand):
 
         # Check block checksums
         self.stdout.write("Checking block checksums...")
-        blocks = StorageBlock.objects.filter(is_free=False)
+        if namespace is None:
+            blocks = StorageBlock.objects.filter(is_free=False)
+        else:
+            block_ids = FileBlock.objects.filter(
+                file__namespace_id=namespace,
+                block__is_free=False,
+            ).values_list("block_id", flat=True)
+            blocks = StorageBlock.objects.filter(id__in=block_ids)
         block_count = 0
         for block in blocks.iterator():
             block_count += 1
@@ -94,6 +101,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"\nFound {len(errors)} errors:"))
             for error in errors:
                 self.stdout.write(self.style.ERROR(f"  - {error}"))
+            raise CommandError("Filesystem integrity check failed")
         else:
             self.stdout.write(
                 self.style.SUCCESS("\nFilesystem check passed. No errors found.")

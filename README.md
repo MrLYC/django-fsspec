@@ -7,11 +7,11 @@ A Django app that provides a file system interface via [fsspec](https://filesyst
 ## Features
 
 - **fsspec compatible** — use standard `fsspec.filesystem("django")` API
-- **Multi-database** — MySQL, PostgreSQL, Oracle, SQLite, and domestic databases
+- **Multi-database** — works through Django ORM on supported relational databases
 - **Configurable block size** — tune storage granularity per deployment
 - **Optimistic locking** — safe concurrent writes with conflict detection
-- **Block pool reuse** — efficient storage with free block recycling
-- **Namespace isolation** — multi-tenant support via integer namespace
+- **Append-safe API** — append mode uses the same database-backed append operation as the public API
+- **Namespace partitioning** — separate path spaces via integer namespace; authorization remains the host app's responsibility
 - **Path validation** — blacklist rules + Unicode NFC normalization
 - **Implicit directories** — no directory records, derived from file paths
 - **Management commands** — `fsspec_gc`, `fsspec_fsck`, `fsspec_stats`
@@ -93,7 +93,7 @@ Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. Updated
 | **List** 1000 files | 2.5ms (394/s) | 5.9ms (168/s) | 3.9ms (254/s) | 6.0ms (167/s) |
 | **Delete** | 2.4ms (413/s) | 5.3ms (188/s) | 3.5ms (284/s) | 3.7ms (268/s) |
 
-Full benchmark results (including MySQL 5.7, PG 9.6, concurrency tests) are collected by CI on every push and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
+Full benchmark results (including concurrency tests) are collected by CI on every push and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
 
 ## Documentation
 

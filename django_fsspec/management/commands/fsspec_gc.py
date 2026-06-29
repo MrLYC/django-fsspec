@@ -11,7 +11,7 @@ class Command(BaseCommand):
             "--keep",
             type=int,
             default=0,
-            help="Number of free blocks to keep in the pool (default: 0)",
+            help="Number of free blocks to retain for inspection (default: 0)",
         )
         parser.add_argument(
             "--dry-run",

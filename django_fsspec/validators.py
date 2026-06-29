@@ -14,7 +14,7 @@ def validate_path(path: str) -> str:
     Rules:
     - Must start with '/'
     - No null bytes or control characters (\\x00-\\x1f)
-    - No '..' as a path segment
+    - No '.' or '..' path segments
     - No consecutive slashes
     - No trailing slash (except root '/' for ls)
     - Unicode NFC normalization applied
@@ -40,11 +40,13 @@ def validate_path(path: str) -> str:
     if path != "/" and path.endswith("/"):
         raise PathValidationError(f"Path must not end with '/': {path!r}")
 
-    # Check for '..' segments
+    # Check for '.' and '..' segments
     segments = path.split("/")
     for segment in segments:
-        if segment == "..":
-            raise PathValidationError(f"Path contains '..' segment: {path!r}")
+        if segment in (".", ".."):
+            raise PathValidationError(
+                f"Path contains {segment!r} segment: {path!r}"
+            )
 
     # Unicode NFC normalization
     normalized = unicodedata.normalize("NFC", path)

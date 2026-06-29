@@ -25,8 +25,9 @@ class TestValidatePath:
     def test_valid_dots_in_filename(self):
         assert validate_path("/file.name.ext") == "/file.name.ext"
 
-    def test_valid_single_dot_segment(self):
-        assert validate_path("/a/./b") == "/a/./b"
+    def test_reject_single_dot_segment(self):
+        with pytest.raises(PathValidationError, match="'.'"):
+            validate_path("/a/./b")
 
     def test_reject_empty(self):
         with pytest.raises(PathValidationError, match="must not be empty"):

@@ -392,20 +392,17 @@ class TestBlockPoolReuse(TestCase):
         assert StorageBlock.objects.filter(is_free=False).count() == 1
 
         write_file(1, "/test.txt", b"second")
-        # Old block freed, new block created or old reused
         assert StorageBlock.objects.filter(is_free=False).count() == 1
-        free_count = StorageBlock.objects.filter(is_free=True).count()
-        # Depending on reuse, might be 0 (reused) or 1 (new block, old freed)
-        assert free_count >= 0
+        assert StorageBlock.objects.filter(is_free=True).count() == 1
 
-    def test_delete_then_write_reuses_blocks(self):
+    def test_delete_then_write_does_not_reuse_free_blocks(self):
         write_file(1, "/test.txt", b"data")
         delete_file(1, "/test.txt")
         assert StorageBlock.objects.filter(is_free=True).count() == 1
 
         write_file(1, "/new.txt", b"new data")
-        # Free block should have been reused
-        assert StorageBlock.objects.filter(is_free=True).count() == 0
+        assert StorageBlock.objects.filter(is_free=True).count() == 1
+        assert StorageBlock.objects.filter(is_free=False).count() == 1
 
 
 class TestOptimisticLocking(TestCase):

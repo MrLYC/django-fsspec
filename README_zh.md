@@ -7,11 +7,11 @@
 ## 特性
 
 - **fsspec 兼容** — 使用标准 `fsspec.filesystem("django")` API
-- **多数据库支持** — MySQL、PostgreSQL、Oracle、SQLite、信创数据库
+- **多数据库支持** — 通过 Django ORM 适配受支持的关系型数据库
 - **可配置块大小** — 按部署需求调整存储粒度
-- **乐观锁** — 安全的并发写入与冲突检测
-- **块池复用** — 空闲块回收，高效存储
-- **命名空间隔离** — 整数命名空间实现多租户
+- **乐观锁** — 并发写入冲突检测
+- **安全追加 API** — 追加模式使用与公开 API 相同的数据库追加操作
+- **命名空间分区** — 整数命名空间提供独立路径空间；授权仍由宿主应用负责
 - **路径校验** — 黑名单规则 + Unicode NFC 归一化
 - **隐式目录** — 无目录记录，从文件路径推导
 - **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_stats`
@@ -93,7 +93,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 | **列目录** 1000 文件 | 2.5ms (394/s) | 5.9ms (168/s) | 3.9ms (254/s) | 6.0ms (167/s) |
 | **删除** | 2.4ms (413/s) | 5.3ms (188/s) | 3.5ms (284/s) | 3.7ms (268/s) |
 
-完整基准测试结果（含 MySQL 5.7、PG 9.6、并发测试）由 CI 在每次推送时自动收集，可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
+完整基准测试结果（含并发测试）由 CI 在每次推送时自动收集，可在 [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions) 查看。
 
 ## 文档
 
