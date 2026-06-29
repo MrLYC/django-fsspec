@@ -17,6 +17,49 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 
 `--db` 是结果展示标签。实际 Django 数据库后端在启动前通过 `DJANGO_FSSPEC_BENCH_DB` 选择。
 
+## 测试与 E2E 配置
+
+单元测试、E2E、benchmark 和手动管理命令都使用共享的示例 Django 项目 `demo.settings`。`demo/` 保持在可安装的 `django_fsspec` 包之外，测试文件放在顶层 `tests/` 目录，因此 wheel 中不会带入 `demo/` 或测试代码。
+
+settings 会根据 `DJANGO_FSSPEC_BENCH_DB` 为 E2E 和 benchmark 选择数据库后端：
+
+| 值 | 后端 |
+|----|------|
+| 未设置 | 单元测试使用内存 SQLite |
+| `sqlite` | 文件型 SQLite benchmark 数据库 |
+| `mysql` | 使用 `MYSQL_*` 环境变量的 MySQL |
+| `postgres` | 使用 `POSTGRES_*` 环境变量的 PostgreSQL |
+| `oracle` | 使用 `ORACLE_*` 环境变量的 Oracle |
+
+`benchmarks/e2e_test.py` 会针对选中的真实数据库后端验证行为。SQLite 会有意跳过并发写场景，因为 SQLite 写入是串行化的；MySQL、PostgreSQL 和 Oracle 会在 CI 中运行完整并发场景。
+
+E2E 覆盖这些面向用户的工作流：
+
+| 领域 | 覆盖内容 |
+|------|----------|
+| 核心文件 API | 写入、读取、覆盖、空文件、多块文件、范围读取、校验和验证 |
+| 目录语义 | 列目录、隐式目录、持久空目录、递归删除、递归复制/移动、`find`/`tree` 视图 |
+| 冲突处理 | 文件/目录路径冲突、隐式目录目标、已存在移动目标、根目录删除保护 |
+| namespace 行为 | 不同 namespace 下相同路径隔离，以及文件/目录树混合冲突隔离 |
+| fsspec 互操作 | `pipe`、`cat`、`ls`、`find`、`mv`、`copy`、`rm` 与底层 operations API 混合使用 |
+| 事务 | 提交、回滚、冲突目录工作流回滚、未关闭写句柄、block 清理 |
+| 并发 | 不同文件写入、同文件覆盖、同文件 append、读写交错、删除/list 竞态、block pool 完整性 |
+
+## 完整本地验证
+
+发布前或修改存储语义时建议运行：
+
+```bash
+python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
+DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
+python demo/manage.py check
+python benchmarks/e2e_test.py
+python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+python -m build --wheel --outdir /tmp/django-fsspec-build-check
+```
+
+构建 wheel 后，应确认 wheel 内容中没有 `demo/`、顶层 `tests/` 或 `django_fsspec/tests/`。生成的 `django_fsspec/_version.py` 应存在于 wheel 中，但它由 `hatch-vcs` 生成，仓库中会忽略该文件。
+
 ## 规模
 
 | 规模 | 用途 | 铺底文件数 | 铺底目录数 | 铺底操作重复次数 | 铺底 `find` 重复次数 |

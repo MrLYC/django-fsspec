@@ -17,6 +17,49 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 
 `--db` is a result label. The actual Django database backend is selected before startup with `DJANGO_FSSPEC_BENCH_DB`.
 
+## Test and E2E configuration
+
+Unit tests, E2E tests, benchmarks, and manual management commands all use the shared demo Django project in `demo.settings`. The demo project is kept outside the installable `django_fsspec` package, and tests live in the top-level `tests/` directory so neither `demo/` nor tests are shipped in the wheel.
+
+The settings module selects the database backend from `DJANGO_FSSPEC_BENCH_DB` for E2E and benchmark runs:
+
+| Value | Backend |
+|-------|---------|
+| unset | In-memory SQLite for unit tests |
+| `sqlite` | File-backed SQLite benchmark database |
+| `mysql` | MySQL using `MYSQL_*` environment variables |
+| `postgres` | PostgreSQL using `POSTGRES_*` environment variables |
+| `oracle` | Oracle using `ORACLE_*` environment variables |
+
+`benchmarks/e2e_test.py` validates behavior against the selected real database backend. SQLite intentionally skips concurrent-write scenarios because SQLite serializes writes, while MySQL, PostgreSQL, and Oracle run the full concurrency set in CI.
+
+The E2E suite covers these user-facing workflows:
+
+| Area | Coverage |
+|------|----------|
+| Core file API | write, read, overwrite, empty files, multi-block files, range reads, checksum verification |
+| Directory semantics | listing, implicit directories, durable empty directories, recursive delete, recursive copy/move, `find`/`tree` views |
+| Conflict handling | file-vs-directory path conflicts, implicit directory targets, existing move destinations, root/delete safety |
+| Namespace behavior | same paths isolated across namespaces and mixed file/tree namespace conflicts |
+| fsspec interoperability | `pipe`, `cat`, `ls`, `find`, `mv`, `copy`, `rm`, and mixed use with lower-level operations APIs |
+| Transactions | commit, rollback, rollback after conflicting tree workflow, unclosed write handles, and block cleanup |
+| Concurrency | different-file writes, same-file overwrites, same-file appends, read/write interleaving, delete/list races, block-pool integrity |
+
+## Full local validation
+
+Run these before publishing or when changing storage semantics:
+
+```bash
+python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
+DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
+python demo/manage.py check
+python benchmarks/e2e_test.py
+python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+python -m build --wheel --outdir /tmp/django-fsspec-build-check
+```
+
+After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fsspec/tests/` are not present in the wheel contents. The generated `django_fsspec/_version.py` should appear in the wheel, but it is ignored in the repository because it is produced by `hatch-vcs`.
+
 ## Scales
 
 | Scale | Purpose | Seeded files | Seeded directories | Seeded operation repeats | Seeded `find` repeats |
