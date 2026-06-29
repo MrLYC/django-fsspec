@@ -5,7 +5,7 @@ from django_fsspec.buffer import DjangoFile
 from django_fsspec.exceptions import NamespaceNotFoundError
 from django_fsspec.fs import DjangoFileSystem
 from django_fsspec.models import Namespace
-from django_fsspec.operations import write_file
+from django_fsspec.operations import append_file, copy_file, move_file, write_file
 
 
 class TestDjangoFileSystem(TestCase):
@@ -163,17 +163,169 @@ class TestDjangoFileSystem(TestCase):
         assert self.fs.cat("/dst.txt") == b"data"
         assert self.fs.exists("/src.txt")
 
+    def test_copy_file_into_existing_directory_uses_basename(self):
+        self.fs.mkdir("/dst")
+        self.fs.pipe("/src.txt", b"data")
+
+        self.fs.copy("/src.txt", "/dst/")
+
+        assert self.fs.cat("/dst/src.txt") == b"data"
+        assert self.fs.cat("/src.txt") == b"data"
+
+    def test_copy_recursive_directory_preserves_relative_paths(self):
+        self.fs.mkdir("/src/empty", create_parents=True)
+        self.fs.pipe("/src/a.txt", b"a")
+        self.fs.pipe("/src/sub/b.txt", b"b")
+
+        self.fs.copy("/src", "/dst", recursive=True)
+
+        assert self.fs.cat("/dst/a.txt") == b"a"
+        assert self.fs.cat("/dst/sub/b.txt") == b"b"
+        assert self.fs.isdir("/dst/empty")
+        assert self.fs.exists("/src/a.txt")
+
+    def test_copy_recursive_empty_directory_into_existing_directory(self):
+        self.fs.mkdir("/src_empty")
+        self.fs.mkdir("/dst")
+
+        self.fs.copy("/src_empty", "/dst/", recursive=True)
+
+        assert self.fs.isdir("/dst/src_empty")
+        assert self.fs.isdir("/src_empty")
+
+    def test_copy_recursive_missing_source_ignored(self):
+        self.fs.copy("/missing", "/dst", recursive=True, on_error="ignore")
+
+        assert not self.fs.exists("/dst")
+
+    def test_copy_recursive_missing_source_raises(self):
+        with pytest.raises(FileNotFoundError):
+            self.fs.copy("/missing", "/dst", recursive=True)
+
     def test_mv(self):
         write_file(1, "/src.txt", b"data")
         self.fs.mv("/src.txt", "/dst.txt")
         assert self.fs.cat("/dst.txt") == b"data"
         assert not self.fs.exists("/src.txt")
 
+    def test_mv_file_into_existing_directory_uses_basename(self):
+        self.fs.mkdir("/dst")
+        self.fs.pipe("/src.txt", b"data")
+
+        self.fs.mv("/src.txt", "/dst/")
+
+        assert self.fs.cat("/dst/src.txt") == b"data"
+        assert not self.fs.exists("/src.txt")
+
+    def test_mv_recursive_directory_preserves_tree(self):
+        self.fs.mkdir("/src/empty", create_parents=True)
+        self.fs.pipe("/src/a.txt", b"a")
+        self.fs.pipe("/src/sub/b.txt", b"b")
+
+        self.fs.mv("/src", "/dst", recursive=True)
+
+        assert self.fs.cat("/dst/a.txt") == b"a"
+        assert self.fs.cat("/dst/sub/b.txt") == b"b"
+        assert self.fs.isdir("/dst/empty")
+        assert not self.fs.exists("/src")
+
     def test_mkdir_creates_directory(self):
         self.fs.mkdir("/somedir")
         assert self.fs.exists("/somedir")
         assert self.fs.info("/somedir")["type"] == "directory"
         assert self.fs.ls("/", detail=False) == ["/somedir"]
+
+    def test_empty_directory_fsspec_views_after_mkdir(self):
+        self.fs.mkdir("/empty")
+
+        assert self.fs.ls("/empty", detail=False) == []
+        assert self.fs.ls("/empty", detail=True) == []
+        assert self.fs.find("/empty") == []
+        assert list(self.fs.walk("/empty")) == [("/empty", [], [])]
+        assert self.fs.glob("/empty/*") == []
+        assert "empty" in self.fs.tree("/empty")
+
+    def test_mixed_explicit_and_implicit_directory_journey(self):
+        self.fs.mkdir("/journey")
+        self.fs.mkdir("/journey/empty")
+        self.fs.pipe("/journey/file.txt", b"root")
+        self.fs.pipe("/journey/implicit/deep.txt", b"deep")
+        self.fs.pipe("/journey/empty/child.txt", b"child")
+        self.fs.pipe("/journey/empty/child.txt", b"updated child")
+        self.fs.mv("/journey/file.txt", "/journey/implicit/moved.txt")
+        self.fs.rm("/journey/empty/child.txt")
+
+        assert self.fs.exists("/journey")
+        assert self.fs.isdir("/journey")
+        assert self.fs.isdir("/journey/empty")
+        assert self.fs.isdir("/journey/implicit")
+        assert not self.fs.exists("/journey/file.txt")
+        assert self.fs.cat("/journey/implicit/moved.txt") == b"root"
+        assert self.fs.ls("/journey/empty", detail=False) == []
+
+        assert sorted(self.fs.ls("/journey", detail=False)) == [
+            "/journey/empty",
+            "/journey/implicit",
+        ]
+        assert sorted(self.fs.find("/journey")) == [
+            "/journey/implicit/deep.txt",
+            "/journey/implicit/moved.txt",
+        ]
+        assert sorted(self.fs.find("/journey", withdirs=True)) == [
+            "/journey/empty",
+            "/journey/implicit",
+            "/journey/implicit/deep.txt",
+            "/journey/implicit/moved.txt",
+        ]
+        tree = self.fs.tree("/journey")
+        assert "empty" in tree
+        assert "deep.txt" in tree
+        assert "moved.txt" in tree
+
+    def test_rejects_file_directory_path_conflicts(self):
+        self.fs.pipe("/conflict", b"flat file")
+
+        with pytest.raises(NotADirectoryError):
+            self.fs.pipe("/conflict/child.txt", b"child")
+
+        assert self.fs.cat("/conflict") == b"flat file"
+        assert not self.fs.exists("/conflict/child.txt")
+
+        self.fs.pipe("/reports/2026/q1.csv", b"q1")
+
+        with pytest.raises(IsADirectoryError):
+            self.fs.pipe("/reports/2026", b"not a directory")
+
+        assert self.fs.cat("/reports/2026/q1.csv") == b"q1"
+        assert self.fs.isdir("/reports/2026")
+
+    def test_mv_same_path_is_noop(self):
+        self.fs.pipe("/same.txt", b"data")
+
+        self.fs.mv("/same.txt", "/same.txt")
+
+        assert self.fs.cat("/same.txt") == b"data"
+
+    def test_mv_overwrite_existing_file_when_requested(self):
+        self.fs.pipe("/src.txt", b"src")
+        self.fs.pipe("/dst.txt", b"dst")
+
+        self.fs.mv("/src.txt", "/dst.txt", overwrite=True)
+
+        assert self.fs.cat("/dst.txt") == b"src"
+        assert not self.fs.exists("/src.txt")
+
+    def test_fsspec_and_operations_interop_journey(self):
+        self.fs.pipe("/interop/raw/input.txt", b"header\n")
+        append_file(1, "/interop/raw/input.txt", b"body\n")
+        copy_file(1, "/interop/raw/input.txt", "/interop/archive/input.txt")
+        self.fs.mv("/interop/archive/input.txt", "/interop/archive/final.txt")
+        move_file(1, "/interop/raw/input.txt", "/interop/raw/source.txt")
+        self.fs.rm("/interop/raw/source.txt")
+
+        assert self.fs.cat("/interop/archive/final.txt") == b"header\nbody\n"
+        assert not self.fs.exists("/interop/raw/source.txt")
+        assert sorted(self.fs.find("/interop")) == ["/interop/archive/final.txt"]
 
     def test_makedirs_creates_parents(self):
         self.fs.makedirs("/a/b/c")
@@ -321,6 +473,14 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         result = self.fs.find("/find")
         assert sorted(result) == ["/find/a.txt", "/find/b.txt"]
 
+    def test_find_file_path_returns_that_file(self):
+        write_file(1, "/find_file.txt", b"data")
+
+        assert self.fs.find("/find_file.txt") == ["/find_file.txt"]
+        assert self.fs.find("/find_file.txt", detail=True)["/find_file.txt"][
+            "size"
+        ] == 4
+
     def test_find_nested(self):
         write_file(1, "/find2/a.txt", b"a")
         write_file(1, "/find2/sub/b.txt", b"b")
@@ -351,6 +511,16 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
         result = self.fs.find("/findwd", withdirs=True)
         assert "/findwd/sub" in result
         assert "/findwd/sub/file.txt" in result
+
+    def test_find_withdirs_maxdepth_includes_immediate_implicit_dirs(self):
+        write_file(1, "/finddepth/sub/file.txt", b"data")
+
+        result = self.fs.find("/finddepth", maxdepth=1, withdirs=True)
+
+        assert result == ["/finddepth/sub"]
+
+    def test_find_missing_path_returns_empty_list(self):
+        assert self.fs.find("/missing") == []
 
     def test_find_root(self):
         write_file(1, "/root_find.txt", b"data")
@@ -445,6 +615,32 @@ class TestDjangoTransaction(TestCase):
         assert self.fs.cat("/tx/a.txt") == b"aaa"
         assert self.fs.cat("/tx/b.txt") == b"bbb"
 
+    def test_transaction_open_handle_commits_on_exit(self):
+        """Unclosed write handles should be finalized before transaction commit."""
+        with self.fs.transaction:
+            f = self.fs.open("/tx/open_commit.txt", "wb")
+            f.write(b"committed")
+
+        assert f.closed
+        assert self.fs.cat("/tx/open_commit.txt") == b"committed"
+
+    def test_transaction_commit_failure_rolls_back(self):
+        """A deferred file commit failure should roll back earlier writes."""
+
+        class FailingFile:
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+            def discard(self):
+                pass
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            with self.fs.transaction as tx:
+                self.fs.pipe("/tx/before_failure.txt", b"data")
+                tx.files.append(FailingFile())
+
+        assert not self.fs.exists("/tx/before_failure.txt")
+
     def test_transaction_rollback_on_exception(self):
         """Files written in a transaction should be rolled back on exception."""
         from django_fsspec.models import FileNode
@@ -461,6 +657,18 @@ class TestDjangoTransaction(TestCase):
         # After rollback, file should not exist
         assert not self.fs.exists("/tx/will_rollback.txt")
         assert not FileNode.objects.filter(path="/tx/will_rollback.txt").exists()
+
+    def test_transaction_unclosed_open_handle_discarded_on_rollback(self):
+        """Late close after rollback must not write outside the transaction."""
+        f = None
+        with pytest.raises(ValueError, match="Intentional rollback"):
+            with self.fs.transaction:
+                f = self.fs.open("/tx/open_rollback.txt", "wb")
+                f.write(b"must not persist")
+                raise ValueError("Intentional rollback")
+
+        f.close()
+        assert not self.fs.exists("/tx/open_rollback.txt")
 
     def test_transaction_rollback_blocks_cleaned(self):
         """Rolled back transaction should not leave orphaned storage blocks."""

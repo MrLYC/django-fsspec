@@ -68,3 +68,14 @@ class DjangoFile(AbstractBufferedFile):
                 )
             self._upload_buffer = b""
         return True
+
+    def commit(self):
+        """Finalize a deferred transaction write before the DB transaction exits."""
+        if not self.closed:
+            self.close()
+
+    def discard(self):
+        """Discard a deferred transaction write without flushing it later."""
+        self.closed = True
+        self.buffer = None
+        self._upload_buffer = b""

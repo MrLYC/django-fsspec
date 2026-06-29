@@ -1,6 +1,6 @@
 import hashlib
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Case, F, Value, When
 from django.db.models.functions import StrIndex, Substr
 
@@ -91,8 +91,32 @@ def _ensure_namespace_exists(namespace: int):
         raise NamespaceNotFoundError(f"Namespace not found: {namespace}")
 
 
+def _ancestor_paths(path: str) -> list[str]:
+    parts = path.strip("/").split("/")
+    ancestors = []
+    for i in range(1, len(parts)):
+        ancestors.append("/" + "/".join(parts[:i]))
+    return ancestors
+
+
 def _ensure_parent_directory(namespace: int, path: str, *, require_exists: bool = False):
     parent = path.rsplit("/", 1)[0] or "/"
+    ancestors = _ancestor_paths(path)
+    if ancestors:
+        blocking_file = (
+            FileNode.objects.filter(
+                namespace_id=namespace,
+                path__in=ancestors,
+                node_type=NODE_TYPE_FILE,
+            )
+            .order_by("path")
+            .first()
+        )
+        if blocking_file is not None:
+            raise NotADirectoryError(
+                f"Parent is not a directory: {blocking_file.path}"
+            )
+
     if parent == "/":
         return
 
@@ -111,6 +135,11 @@ def _ensure_file_target(namespace: int, path: str):
     try:
         file_node = FileNode.objects.get(namespace_id=namespace, path=path)
     except FileNode.DoesNotExist:
+        if FileNode.objects.filter(
+            namespace_id=namespace,
+            path__startswith=path.rstrip("/") + "/",
+        ).exists():
+            raise IsADirectoryError(f"Path is a directory: {path}")
         return None
 
     if file_node.node_type == NODE_TYPE_DIRECTORY:
@@ -201,7 +230,7 @@ def create_file_exclusive(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
-        if FileNode.objects.filter(namespace_id=namespace, path=path).exists():
+        if _ensure_file_target(namespace, path) is not None:
             raise FileExistsError(f"File already exists: {path}")
 
         try:
@@ -214,7 +243,7 @@ def create_file_exclusive(
                 checksum=file_checksum,
                 content_type=content_type,
             )
-        except Exception:
+        except IntegrityError:
             raise FileExistsError(f"File already exists: {path}")
 
         blocks = _allocate_blocks(chunks)
@@ -479,12 +508,21 @@ def remove_directory(namespace: int, path: str, recursive: bool = False):
     if path == "/":
         raise IsADirectoryError("Cannot remove root directory")
 
+    try:
+        node = FileNode.objects.get(namespace_id=namespace, path=path)
+    except FileNode.DoesNotExist:
+        node = None
+    if node is not None and node.node_type != NODE_TYPE_DIRECTORY:
+        raise NotADirectoryError(f"Path is not a directory: {path}")
+
     delete_file(namespace, path, recursive=recursive)
 
 
 def delete_file(namespace: int, path: str, recursive: bool = False):
     """Delete a file or directory."""
     path = validate_path(path)
+    if path == "/":
+        raise IsADirectoryError("Cannot remove root directory")
 
     try:
         file_node = FileNode.objects.get(namespace_id=namespace, path=path)
@@ -600,6 +638,8 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
     dst = validate_path(dst)
     _reject_root_file_path(src)
     _reject_root_file_path(dst)
+    if src == dst:
+        return
     _ensure_parent_directory(namespace, dst)
 
     with transaction.atomic():
@@ -609,6 +649,11 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
                 path=src,
             )
         except FileNode.DoesNotExist:
+            if FileNode.objects.filter(
+                namespace_id=namespace,
+                path__startswith=src.rstrip("/") + "/",
+            ).exists():
+                raise IsADirectoryError(f"Source is a directory: {src}")
             raise FileNotFoundError(f"File not found: {src}")
 
         if file_node.node_type == NODE_TYPE_DIRECTORY:
@@ -621,6 +666,12 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
             )
         except FileNode.DoesNotExist:
             dest_node = None
+
+        if dest_node is None and FileNode.objects.filter(
+            namespace_id=namespace,
+            path__startswith=dst.rstrip("/") + "/",
+        ).exists():
+            raise IsADirectoryError(f"Destination is a directory: {dst}")
 
         if dest_node is not None:
             if not overwrite:

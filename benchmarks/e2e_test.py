@@ -839,6 +839,70 @@ def run_e2e(db_name):
     if not skip_concurrency:
         runner.run("tx_concurrent_append_ordering", test_tx_concurrent_append_ordering)
 
+    def test_tx_concurrent_same_file_append():
+        """Concurrent appends to one file may conflict, but successful appends
+        must be durable exactly once with intact block metadata."""
+        if skip_concurrency:
+            return
+        runner.reset_db()
+        write_file(DEFAULT_NAMESPACE_ID, "/tx/shared_append.log", b"")
+
+        import hashlib
+
+        n_threads = 4
+        n_appends = 8
+        chunk_size = 64
+        barrier = threading.Barrier(n_threads, timeout=10)
+        lock = threading.Lock()
+        successes = []
+        conflicts = 0
+        errors = []
+
+        def appender(tid):
+            nonlocal conflicts
+            try:
+                barrier.wait()
+                for i in range(n_appends):
+                    marker = f"[thread={tid:02d},append={i:02d}]".encode()
+                    chunk = marker.ljust(chunk_size, b".")
+                    try:
+                        append_file(DEFAULT_NAMESPACE_ID, "/tx/shared_append.log", chunk)
+                        with lock:
+                            successes.append(chunk)
+                    except FileConflictError:
+                        with lock:
+                            conflicts += 1
+            except Exception as e:
+                with lock:
+                    errors.append((tid, e))
+
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = [pool.submit(appender, t) for t in range(n_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert not errors, f"Append errors: {errors}"
+        assert successes, "At least one append should succeed"
+        assert conflicts + len(successes) == n_threads * n_appends
+
+        data = read_file(DEFAULT_NAMESPACE_ID, "/tx/shared_append.log")
+        assert len(data) == len(successes) * chunk_size
+        for chunk in successes:
+            assert data.count(chunk) == 1, f"Missing or duplicate chunk: {chunk!r}"
+
+        node = FileNode.objects.get(namespace=DEFAULT_NAMESPACE_ID, path="/tx/shared_append.log")
+        blocks = list(
+            FileBlock.objects.filter(file=node)
+            .select_related("block")
+            .order_by("sequence")
+        )
+        assert node.size == len(data)
+        assert node.checksum == hashlib.sha256(data).hexdigest()
+        assert [fb.sequence for fb in blocks] == list(range(len(blocks)))
+
+    if not skip_concurrency:
+        runner.run("tx_concurrent_same_file_append", test_tx_concurrent_same_file_append)
+
     def test_tx_namespace_isolation_under_contention():
         """Writes to different namespaces under contention should never leak across."""
         if skip_concurrency:
@@ -880,6 +944,155 @@ def run_e2e(db_name):
 
     if not skip_concurrency:
         runner.run("tx_namespace_isolation_under_contention", test_tx_namespace_isolation_under_contention)
+
+    # --- Mixed Filesystem Semantics ---
+    def test_fsspec_mixed_directory_journey():
+        runner.reset_db()
+        fs.mkdir("/journey")
+        fs.mkdir("/journey/empty")
+        fs.pipe("/journey/file.txt", b"root")
+        fs.pipe("/journey/implicit/deep.txt", b"deep")
+        fs.pipe("/journey/empty/child.txt", b"child")
+        fs.pipe("/journey/empty/child.txt", b"updated child")
+        fs.mv("/journey/file.txt", "/journey/implicit/moved.txt")
+        fs.rm("/journey/empty/child.txt")
+
+        assert fs.exists("/journey")
+        assert fs.isdir("/journey")
+        assert fs.isdir("/journey/empty")
+        assert fs.isdir("/journey/implicit")
+        assert not fs.exists("/journey/file.txt")
+        assert fs.cat("/journey/implicit/moved.txt") == b"root"
+        assert fs.ls("/journey/empty", detail=False) == []
+        assert sorted(fs.ls("/journey", detail=False)) == [
+            "/journey/empty",
+            "/journey/implicit",
+        ]
+        assert sorted(fs.find("/journey")) == [
+            "/journey/implicit/deep.txt",
+            "/journey/implicit/moved.txt",
+        ]
+        assert sorted(fs.find("/journey", withdirs=True)) == [
+            "/journey/empty",
+            "/journey/implicit",
+            "/journey/implicit/deep.txt",
+            "/journey/implicit/moved.txt",
+        ]
+        tree = fs.tree("/journey")
+        assert "empty" in tree
+        assert "deep.txt" in tree
+        assert "moved.txt" in tree
+
+    runner.run("fsspec_mixed_directory_journey", test_fsspec_mixed_directory_journey)
+
+    def test_mixed_namespace_tree_conflicts():
+        runner.reset_db()
+        Namespace.objects.get_or_create(
+            id=SECONDARY_NAMESPACE_ID,
+            defaults={"name": "secondary", "description": "Secondary test namespace"},
+        )
+        fs_default = DjangoFileSystem(namespace_id=DEFAULT_NAMESPACE_ID)
+        fs_secondary = DjangoFileSystem(namespace_id=SECONDARY_NAMESPACE_ID)
+
+        fs_default.pipe("/shared", b"default flat file")
+        fs_secondary.pipe("/shared/child.txt", b"secondary tree file")
+
+        assert fs_default.isfile("/shared")
+        assert not fs_default.exists("/shared/child.txt")
+        assert fs_default.cat("/shared") == b"default flat file"
+
+        assert fs_secondary.isdir("/shared")
+        assert fs_secondary.cat("/shared/child.txt") == b"secondary tree file"
+        assert fs_secondary.ls("/shared", detail=False) == ["/shared/child.txt"]
+
+        try:
+            fs_default.pipe("/shared/child.txt", b"should fail")
+            assert False, "Writing below a file should fail"
+        except NotADirectoryError:
+            pass
+
+        try:
+            fs_secondary.pipe("/shared", b"should fail")
+            assert False, "Writing over an implicit directory should fail"
+        except IsADirectoryError:
+            pass
+
+        assert fs_default.cat("/shared") == b"default flat file"
+        assert fs_secondary.cat("/shared/child.txt") == b"secondary tree file"
+        assert sorted(fs_secondary.find("/shared", withdirs=True)) == [
+            "/shared/child.txt",
+        ]
+
+    runner.run("mixed_namespace_tree_conflicts", test_mixed_namespace_tree_conflicts)
+
+    def test_mixed_api_interop_journey():
+        runner.reset_db()
+        fs.pipe("/interop/raw/input.txt", b"header\n")
+        append_file(DEFAULT_NAMESPACE_ID, "/interop/raw/input.txt", b"body\n")
+        copy_file(
+            DEFAULT_NAMESPACE_ID,
+            "/interop/raw/input.txt",
+            "/interop/archive/input.txt",
+        )
+        fs.mv("/interop/archive/input.txt", "/interop/archive/final.txt")
+        move_file(
+            DEFAULT_NAMESPACE_ID,
+            "/interop/raw/input.txt",
+            "/interop/raw/source.txt",
+        )
+        fs.rm("/interop/raw/source.txt")
+
+        assert fs.cat("/interop/archive/final.txt") == b"header\nbody\n"
+        assert not fs.exists("/interop/raw/source.txt")
+        assert sorted(fs.find("/interop")) == ["/interop/archive/final.txt"]
+        assert fs.info("/interop/archive")["type"] == "directory"
+
+    runner.run("mixed_api_interop_journey", test_mixed_api_interop_journey)
+
+    def test_fsspec_recursive_copy_move_journey():
+        runner.reset_db()
+        fs.mkdir("/project/empty", create_parents=True)
+        fs.pipe("/project/input/a.txt", b"a")
+        fs.pipe("/project/input/sub/b.txt", b"b")
+
+        fs.copy("/project", "/backup", recursive=True)
+        fs.mv("/project/input", "/published", recursive=True)
+
+        assert fs.cat("/backup/input/a.txt") == b"a"
+        assert fs.cat("/backup/input/sub/b.txt") == b"b"
+        assert fs.isdir("/backup/empty")
+        assert fs.cat("/published/a.txt") == b"a"
+        assert fs.cat("/published/sub/b.txt") == b"b"
+        assert not fs.exists("/project/input")
+        assert fs.isdir("/project/empty")
+
+    runner.run("fsspec_recursive_copy_move_journey", test_fsspec_recursive_copy_move_journey)
+
+    def test_transaction_conflict_rolls_back_tree_workflow():
+        runner.reset_db()
+        fs.pipe("/safe/source.txt", b"source")
+        fs.pipe("/safe/dst/existing.txt", b"existing")
+        initial_used_blocks = StorageBlock.objects.filter(is_free=False).count()
+        initial_free_blocks = StorageBlock.objects.filter(is_free=True).count()
+
+        try:
+            with fs.transaction:
+                fs.pipe("/safe/temp.txt", b"temporary")
+                fs.mv("/safe/source.txt", "/safe/dst/existing.txt")
+                assert False, "Moving over an existing file should fail by default"
+        except FileExistsError:
+            pass
+
+        assert fs.cat("/safe/source.txt") == b"source"
+        assert fs.cat("/safe/dst/existing.txt") == b"existing"
+        assert not fs.exists("/safe/temp.txt")
+        assert StorageBlock.objects.filter(is_free=False).count() == initial_used_blocks
+        assert StorageBlock.objects.filter(is_free=True).count() == initial_free_blocks
+
+    runner.run(
+        "transaction_conflict_rolls_back_tree_workflow",
+        test_transaction_conflict_rolls_back_tree_workflow,
+    )
 
     runner.reset_db()
     return runner.report()

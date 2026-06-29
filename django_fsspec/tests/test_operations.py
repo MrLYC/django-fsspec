@@ -9,7 +9,7 @@ from django_fsspec.exceptions import (
     NamespaceNotFoundError,
     PathValidationError,
 )
-from django_fsspec.models import FileBlock, FileNode, StorageBlock
+from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
 from django_fsspec.operations import (
     append_file,
     copy_file,
@@ -68,6 +68,10 @@ class TestWriteFile(TestCase):
         with pytest.raises(PathValidationError):
             write_file(1, "no-slash", b"data")
 
+    def test_write_root_path_fails(self):
+        with pytest.raises(IsADirectoryError):
+            write_file(1, "/", b"data")
+
     def test_write_with_content_type(self):
         node = write_file(1, "/doc.json", b"{}", content_type="application/json")
         assert node.content_type == "application/json"
@@ -96,6 +100,24 @@ class TestWriteFile(TestCase):
         with pytest.raises(NamespaceNotFoundError, match="Namespace not found: 0"):
             write_file(0, "/test.txt", b"data")
 
+    def test_write_rejects_implicit_directory_target(self):
+        write_file(1, "/reports/2026/q1.csv", b"q1")
+
+        with pytest.raises(IsADirectoryError):
+            write_file(1, "/reports/2026", b"not a directory")
+
+        assert read_file(1, "/reports/2026/q1.csv") == b"q1"
+        assert get_file_info(1, "/reports/2026")["type"] == "directory"
+
+    def test_write_rejects_file_ancestor(self):
+        write_file(1, "/reports", b"file")
+
+        with pytest.raises(NotADirectoryError):
+            write_file(1, "/reports/2026/q1.csv", b"q1")
+
+        assert read_file(1, "/reports") == b"file"
+        assert not file_exists(1, "/reports/2026")
+
 
 class TestCreateFileExclusive(TestCase):
     def test_create_new(self):
@@ -106,6 +128,12 @@ class TestCreateFileExclusive(TestCase):
         write_file(1, "/test.txt", b"data")
         with pytest.raises(FileExistsError):
             create_file_exclusive(1, "/test.txt", b"other")
+
+    def test_create_rejects_implicit_directory_target(self):
+        write_file(1, "/archive/2026/january.txt", b"jan")
+
+        with pytest.raises(IsADirectoryError):
+            create_file_exclusive(1, "/archive/2026", b"not a directory")
 
     @override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=10)
     def test_create_too_large(self):
@@ -143,6 +171,13 @@ class TestAppendFile(TestCase):
         # Original data should be intact (transaction rolled back)
         assert read_file(1, "/big.txt") == b"x" * 15
 
+    @override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=5)
+    def test_append_new_file_too_large(self):
+        with pytest.raises(FileTooLargeError):
+            append_file(1, "/new_big.txt", b"x" * 6)
+
+        assert not file_exists(1, "/new_big.txt")
+
     def test_append_conflict(self):
         """Simulate optimistic lock conflict during append."""
         from unittest.mock import patch
@@ -161,6 +196,22 @@ class TestAppendFile(TestCase):
         with patch.object(FileNode.objects, "get", side_effect=stale_get):
             with pytest.raises(FileConflictError):
                 append_file(1, "/conflict.txt", b"+appended")
+
+    def test_append_rejects_implicit_directory_target(self):
+        write_file(1, "/logs/2026/app.log", b"line1\n")
+
+        with pytest.raises(IsADirectoryError):
+            append_file(1, "/logs/2026", b"line2\n")
+
+        assert read_file(1, "/logs/2026/app.log") == b"line1\n"
+
+    def test_append_rejects_file_ancestor(self):
+        write_file(1, "/logs", b"flat log")
+
+        with pytest.raises(NotADirectoryError):
+            append_file(1, "/logs/2026/app.log", b"line\n")
+
+        assert read_file(1, "/logs") == b"flat log"
 
 
 class TestReadFile(TestCase):
@@ -204,6 +255,12 @@ class TestReadFileRange(TestCase):
     def test_range_start_zero(self):
         write_file(1, "/test.txt", b"hello")
         assert read_file_range(1, "/test.txt", 0, 3) == b"hel"
+
+    def test_range_directory_fails(self):
+        make_directory(1, "/dir")
+
+        with pytest.raises(IsADirectoryError):
+            read_file_range(1, "/dir", 0, 1)
 
 
 class TestGetFileInfo(TestCase):
@@ -276,6 +333,17 @@ class TestDeleteFile(TestCase):
         delete_file(1, "/dir", recursive=True)
         assert StorageBlock.objects.filter(is_free=True).count() == 2
 
+    def test_delete_root_recursive_is_rejected_and_preserves_namespace(self):
+        Namespace.objects.create(id=2, name="other")
+        write_file(1, "/a.txt", b"default")
+        write_file(2, "/a.txt", b"other")
+
+        with pytest.raises(IsADirectoryError):
+            delete_file(1, "/", recursive=True)
+
+        assert read_file(1, "/a.txt") == b"default"
+        assert read_file(2, "/a.txt") == b"other"
+
 
 class TestListDirectory(TestCase):
     def test_list_root(self):
@@ -304,6 +372,12 @@ class TestListDirectory(TestCase):
     def test_list_empty_directory(self):
         result = list_directory(1, "/")
         assert result == []
+
+    def test_list_file_path_fails(self):
+        write_file(1, "/file.txt", b"data")
+
+        with pytest.raises(NotADirectoryError):
+            list_directory(1, "/file.txt")
 
 
 class TestListDirectoryDetail(TestCase):
@@ -341,15 +415,54 @@ class TestDirectoryOperations(TestCase):
         with pytest.raises(FileNotFoundError):
             make_directory(1, "/a/b")
 
+    def test_make_directory_root_fails(self):
+        with pytest.raises(FileExistsError):
+            make_directory(1, "/")
+
+    def test_make_directory_existing_directory_fails(self):
+        make_directory(1, "/dir")
+
+        with pytest.raises(FileExistsError):
+            make_directory(1, "/dir")
+
+    def test_make_directory_existing_file_fails(self):
+        write_file(1, "/dir", b"file")
+
+        with pytest.raises(FileExistsError):
+            make_directory(1, "/dir")
+
+    def test_make_directory_existing_implicit_directory_fails(self):
+        write_file(1, "/dir/file.txt", b"file")
+
+        with pytest.raises(FileExistsError):
+            make_directory(1, "/dir")
+
     def test_write_file_on_directory_fails(self):
         make_directory(1, "/dir")
         with pytest.raises(IsADirectoryError):
             write_file(1, "/dir", b"data")
 
+    def test_make_directory_under_file_fails(self):
+        write_file(1, "/dir", b"file")
+
+        with pytest.raises(NotADirectoryError):
+            make_directory(1, "/dir/sub", create_parents=True)
+
     def test_remove_empty_directory(self):
         make_directory(1, "/empty")
         remove_directory(1, "/empty")
         assert not file_exists(1, "/empty")
+
+    def test_remove_root_directory_fails(self):
+        with pytest.raises(IsADirectoryError):
+            remove_directory(1, "/")
+
+    def test_remove_implicit_directory_recursive(self):
+        write_file(1, "/implicit/file.txt", b"data")
+
+        remove_directory(1, "/implicit", recursive=True)
+
+        assert not file_exists(1, "/implicit")
 
     def test_remove_non_empty_directory_requires_recursive(self):
         make_directory(1, "/dir")
@@ -364,6 +477,15 @@ class TestDirectoryOperations(TestCase):
         assert not file_exists(1, "/dir")
         assert StorageBlock.objects.filter(is_free=True).count() == 1
 
+    def test_remove_directory_rejects_file_path(self):
+        write_file(1, "/file.txt", b"data")
+
+        with pytest.raises(NotADirectoryError):
+            remove_directory(1, "/file.txt")
+
+        assert read_file(1, "/file.txt") == b"data"
+        assert StorageBlock.objects.filter(is_free=False).count() == 1
+
 
 class TestCopyFile(TestCase):
     def test_copy(self):
@@ -375,6 +497,22 @@ class TestCopyFile(TestCase):
     def test_copy_not_found(self):
         with pytest.raises(FileNotFoundError):
             copy_file(1, "/nonexistent.txt", "/dst.txt")
+
+    def test_copy_rejects_implicit_directory_destination(self):
+        write_file(1, "/src.txt", b"src")
+        write_file(1, "/dst/existing.txt", b"existing")
+
+        with pytest.raises(IsADirectoryError):
+            copy_file(1, "/src.txt", "/dst")
+
+        assert read_file(1, "/src.txt") == b"src"
+        assert read_file(1, "/dst/existing.txt") == b"existing"
+
+    def test_copy_rejects_source_directory(self):
+        write_file(1, "/src/file.txt", b"src")
+
+        with pytest.raises(IsADirectoryError):
+            copy_file(1, "/src", "/dst.txt")
 
 
 class TestMoveFile(TestCase):
@@ -388,11 +526,70 @@ class TestMoveFile(TestCase):
         with pytest.raises(FileNotFoundError):
             move_file(1, "/nonexistent.txt", "/dst.txt")
 
+    def test_move_explicit_directory_source_fails(self):
+        make_directory(1, "/src")
+
+        with pytest.raises(IsADirectoryError):
+            move_file(1, "/src", "/dst")
+
     def test_move_dst_exists(self):
         write_file(1, "/src.txt", b"src")
         write_file(1, "/dst.txt", b"dst")
         with pytest.raises(FileExistsError):
             move_file(1, "/src.txt", "/dst.txt")
+
+    def test_move_same_path_is_noop(self):
+        write_file(1, "/same.txt", b"data")
+        node = FileNode.objects.get(path="/same.txt")
+        block_ids = list(
+            FileBlock.objects.filter(file=node).values_list("block_id", flat=True)
+        )
+
+        move_file(1, "/same.txt", "/same.txt", overwrite=True)
+
+        node.refresh_from_db()
+        assert read_file(1, "/same.txt") == b"data"
+        assert node.version == 1
+        assert list(
+            FileBlock.objects.filter(file=node).values_list("block_id", flat=True)
+        ) == block_ids
+
+    def test_move_overwrite_existing_file(self):
+        write_file(1, "/src.txt", b"src")
+        write_file(1, "/dst.txt", b"dst")
+
+        move_file(1, "/src.txt", "/dst.txt", overwrite=True)
+
+        assert read_file(1, "/dst.txt") == b"src"
+        assert not file_exists(1, "/src.txt")
+        assert StorageBlock.objects.filter(is_free=True).count() == 1
+
+    def test_move_rejects_implicit_directory_source(self):
+        write_file(1, "/src/file.txt", b"src")
+
+        with pytest.raises(IsADirectoryError):
+            move_file(1, "/src", "/dst.txt")
+
+        assert read_file(1, "/src/file.txt") == b"src"
+
+    def test_move_rejects_implicit_directory_destination(self):
+        write_file(1, "/src.txt", b"src")
+        write_file(1, "/dst/existing.txt", b"existing")
+
+        with pytest.raises(IsADirectoryError):
+            move_file(1, "/src.txt", "/dst")
+
+        assert read_file(1, "/src.txt") == b"src"
+        assert read_file(1, "/dst/existing.txt") == b"existing"
+
+    def test_move_rejects_explicit_directory_destination(self):
+        write_file(1, "/src.txt", b"src")
+        make_directory(1, "/dst")
+
+        with pytest.raises(IsADirectoryError):
+            move_file(1, "/src.txt", "/dst", overwrite=True)
+
+        assert read_file(1, "/src.txt") == b"src"
 
 
 class TestBlockPoolReuse(TestCase):

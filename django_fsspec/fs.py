@@ -1,9 +1,14 @@
+from collections import deque
+
 from django.db import transaction as db_transaction
+from fsspec.implementations.local import trailing_sep
 from fsspec.spec import AbstractFileSystem
 from fsspec.transaction import Transaction
+from fsspec.utils import other_paths
 
 from . import operations
 from .buffer import DjangoFile
+from .models import NODE_TYPE_DIRECTORY, NODE_TYPE_FILE
 
 
 class DjangoTransaction(Transaction):
@@ -23,13 +28,25 @@ class DjangoTransaction(Transaction):
     def start(self):
         if self.fs._intrans:
             raise RuntimeError("Nested transactions are not supported")
-        self.files = []
+        self.files = deque()
         self.fs._intrans = True
         self._atomic = db_transaction.atomic()
         self._atomic.__enter__()
 
     def complete(self, commit=True):
         try:
+            try:
+                while self.files:
+                    f = self.files.popleft()
+                    if commit:
+                        f.commit()
+                    else:
+                        f.discard()
+            except Exception as e:
+                db_transaction.set_rollback(True)
+                self._atomic.__exit__(type(e), e, e.__traceback__)
+                raise
+
             if not commit:
                 db_transaction.set_rollback(True)
             self._atomic.__exit__(None, None, None)
@@ -82,10 +99,9 @@ class DjangoFileSystem(AbstractFileSystem):
         except FileNotFoundError:
             pass
 
-        # Try as directory
+        # Try as directory. list_directory validates that the path exists and is a
+        # directory; an empty result is a valid empty directory.
         entries = operations.list_directory(self.namespace, path)
-        if not entries:
-            raise FileNotFoundError(f"Path not found: {path}")
 
         prefix = path.rstrip("/") + "/"
         if detail:
@@ -148,10 +164,75 @@ class DjangoFileSystem(AbstractFileSystem):
         path2 = self._strip_protocol(path2)
         operations.copy_file(self.namespace, path1, path2)
 
+    def copy(
+        self, path1, path2, recursive=False, maxdepth=None, on_error=None, **kwargs
+    ):
+        if not recursive:
+            return super().copy(
+                path1,
+                path2,
+                recursive=recursive,
+                maxdepth=maxdepth,
+                on_error=on_error,
+                **kwargs,
+            )
+
+        source = self._strip_protocol(path1)
+        sources = self.find(source, maxdepth=maxdepth, withdirs=True)
+        if not sources and self.isfile(source):
+            sources = [source]
+        if not sources:
+            if not self.isdir(source):
+                if on_error == "ignore":
+                    return
+                raise FileNotFoundError(source)
+
+            destination = self._strip_protocol(path2).rstrip("/")
+            if trailing_sep(path2) or self.isdir(path2):
+                destination = destination + "/" + source.rstrip("/").rsplit("/", 1)[-1]
+            self.makedirs(destination, exist_ok=True)
+            return
+
+        dest_is_dir = isinstance(path2, str) and (
+            trailing_sep(path2) or self.isdir(path2)
+        )
+        exists = isinstance(path1, str) and dest_is_dir and not trailing_sep(path1)
+        destinations = other_paths(sources, path2, exists=exists, flatten=False)
+
+        for src, dst in zip(sources, destinations):
+            try:
+                if self.isdir(src):
+                    self.makedirs(dst, exist_ok=True)
+                else:
+                    self.cp_file(src, dst, **kwargs)
+            except FileNotFoundError:
+                if on_error != "ignore":
+                    raise
+
     def mv(self, path1, path2, recursive=False, maxdepth=None, **kwargs):
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
-        operations.move_file(self.namespace, path1, path2)
+        if path1 == path2:
+            return
+        if recursive or self.isdir(path1):
+            self.copy(
+                path1,
+                path2,
+                recursive=True,
+                maxdepth=maxdepth,
+                on_error="raise",
+                **kwargs,
+            )
+            self.rm(path1, recursive=True, maxdepth=maxdepth)
+            return
+        if trailing_sep(path2) or self.isdir(path2):
+            path2 = path2.rstrip("/") + "/" + path1.rsplit("/", 1)[-1]
+        operations.move_file(
+            self.namespace,
+            path1,
+            path2,
+            overwrite=kwargs.get("overwrite", False),
+        )
 
     def touch(self, path, truncate=True, **kwargs):
         path = self._strip_protocol(path)
@@ -178,30 +259,42 @@ class DjangoFileSystem(AbstractFileSystem):
     def find(self, path, maxdepth=None, withdirs=False, detail=False, **kwargs):
         """List all files under path, using database prefix query."""
         path = self._strip_protocol(path)
+        if path and path != "/":
+            try:
+                info = operations.get_file_info(self.namespace, path)
+            except FileNotFoundError:
+                pass
+            else:
+                if info["type"] == NODE_TYPE_FILE:
+                    if detail:
+                        return {path: info}
+                    return [path]
+
         if not path or path == "/":
             prefix = "/"
         else:
             prefix = path.rstrip("/") + "/"
 
-        from .models import NODE_TYPE_DIRECTORY, FileNode
+        from .models import FileNode
 
-        nodes = list(
+        all_nodes = list(
             FileNode.objects.filter(
                 namespace=self.namespace,
                 path__startswith=prefix,
             )
         )
-        if maxdepth is not None:
-            # Filter by depth: count slashes in relative path
-            # maxdepth=1 → only direct children (0 slashes in relative)
-            # maxdepth=2 → up to one nested level (0 or 1 slashes)
-            nodes = [
-                n for n in nodes
-                if n.path[len(prefix):].count("/") < maxdepth
-            ]
+
+        def within_maxdepth(node_path):
+            if maxdepth is None:
+                return True
+            return node_path[len(prefix):].count("/") < maxdepth
 
         results = {}
-        for node in nodes:
+        for node in all_nodes:
+            if not within_maxdepth(node.path):
+                continue
+            if node.node_type == NODE_TYPE_DIRECTORY and not withdirs:
+                continue
             entry = {
                 "name": node.path,
                 "size": node.size if node.node_type != NODE_TYPE_DIRECTORY else 0,
@@ -212,12 +305,14 @@ class DjangoFileSystem(AbstractFileSystem):
         if withdirs:
             # Collect implicit directories
             dirs = set()
-            for node_path in results:
+            for node in all_nodes:
+                node_path = node.path
                 relative = node_path[len(prefix):]
                 parts = relative.split("/")
                 for i in range(len(parts) - 1):
                     dir_path = prefix + "/".join(parts[:i + 1])
-                    dirs.add(dir_path)
+                    if within_maxdepth(dir_path):
+                        dirs.add(dir_path)
             for d in dirs:
                 if d not in results:
                     results[d] = {"name": d, "size": 0, "type": "directory"}
