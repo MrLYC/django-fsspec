@@ -685,23 +685,23 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
             return
 
         prefix = path.rstrip("/") + "/"
-        children = FileNode.objects.select_for_update().filter(
-            namespace_id=namespace,
-            path__startswith=prefix,
+        children = list(
+            FileNode.objects.select_for_update().filter(
+                namespace_id=namespace,
+                path__startswith=prefix,
+            )
         )
 
-        has_children = children.exists()
+        has_children = bool(children)
         if file_node is None and not has_children:
             raise FileNotFoundError(f"Path not found: {path}")
 
         if has_children and not recursive:
             raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
 
-        nodes_to_delete_qs = children
+        node_ids = [node.pk for node in children]
         if file_node is not None:
-            nodes_to_delete_qs = FileNode.objects.filter(pk=file_node.pk) | children
-
-        node_ids = list(nodes_to_delete_qs.values_list("pk", flat=True))
+            node_ids.append(file_node.pk)
         _release_file_blocks(node_ids)
         FileNode.objects.filter(pk__in=node_ids).delete()
 
