@@ -28,13 +28,12 @@ Directories are also inferred from file paths for backward compatibility, so `/d
 ```python
 fs.ls("/", detail=False)  # ["/file.txt", "/subdir"]
 fs.ls("/", detail=True)   # [{"name": "/file.txt", "size": 100, "type": "file"}, ...]
-fs.ls("/", detail=True, tolerant=True)  # marks corrupt children instead of aborting
+fs.ls("/", detail=True, tolerant=True)  # validates and marks corrupt children
 ```
 
-Normal detailed listing is strict for file entries: if a file's persisted
-metadata or block graph is inconsistent, listing raises `DataIntegrityError`.
-Use `tolerant=True` during incident inventory to keep healthy entries visible
-and return corrupt entries as metadata such as
+Normal detailed listing is metadata-only and does not validate file contents or
+block graphs. Use `tolerant=True` during incident inventory to validate entries,
+keep healthy entries visible, and return corrupt entries as metadata such as
 `{"name": "/bad.txt", "type": "corrupt", "error": "..."}`.
 
 ## Deletion
@@ -53,8 +52,14 @@ fs.mv("/src.txt", "/dst.txt")        # Move (updates path field)
 fs.mv("/src", "/archive", recursive=True)  # Directory move (metadata rewrite)
 ```
 
-`copy_file()` verifies source integrity by default before writing a new
-destination, so it will not turn a corrupted source into a healthy-looking copy.
+`copy_file()` preserves the normal low-overhead behavior by default. For
+backup-style copies, request verification explicitly:
+
+```python
+from django_fsspec.operations import copy_file
+
+copy_file(1, "/src.txt", "/dst.txt", integrity="checksum")
+```
 
 Recursive `fs.copy()` is a per-file copy workflow, not a point-in-time snapshot.
 If source files are overwritten while a recursive copy is running, the result is

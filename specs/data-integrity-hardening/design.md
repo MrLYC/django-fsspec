@@ -27,7 +27,7 @@ Add explicit integrity behavior levels:
 
 | Mode | Behavior |
 |------|----------|
-| `strict` | Fail fast on integrity or structure problems. This is appropriate for normal application writes and verified reads. |
+| `strict` | Fail fast on integrity or structure problems. This is appropriate for verified reads, audited copies, and management workflows. |
 | `degraded` | Keep healthy objects available while marking or skipping corrupt objects. This is appropriate for incident browsing, inventory, and partial export. |
 | `repair` | Management-command-only mode that audits and mutates metadata with explicit flags. |
 
@@ -118,9 +118,11 @@ reads can validate only the blocks needed for the requested range plus file-leve
 metadata that is cheap to check. Full file checksum requires reading all bytes
 and should be tied to the `checksum` policy.
 
-`copy_file()` and any backup/export-like flow should use at least `metadata`
-policy by default and prefer `checksum` where practical. This prevents corrupted
-source bytes from being copied into a new destination with fresh metadata.
+`copy_file()` should keep the default path low-overhead for normal application
+workflows. Backup/export-like callers should pass at least `metadata` and prefer
+`checksum` where practical. This prevents corrupted source bytes from being
+copied into a new destination with fresh metadata when the caller has requested
+that stronger contract.
 
 ## Tolerant Listing
 
@@ -129,7 +131,7 @@ walking healthy entries even when some rows are corrupt.
 
 Behavior:
 
-- Strict listing raises `DataIntegrityError` on structural problems.
+- Default listing is metadata-only and avoids per-file validation overhead.
 - Tolerant listing either skips corrupt entries or returns a structured marker:
 
   ```python
@@ -146,18 +148,18 @@ Behavior:
 
 ## Dirty-Graph Write Protection
 
-Before destructive operations such as overwrite, delete, move, and recursive
-delete, perform a lightweight target graph check:
+Destructive operations such as overwrite, delete, move, and recursive delete
+should avoid expensive validation of old content. They should use release logic
+that is safe even when mappings are dirty:
 
-- file mappings are contiguous and belong to a file node
-- referenced blocks are not marked free
-- blocks are not shared unexpectedly across multiple files
+- deleting mappings marks only now-ownerless storage blocks as free
+- stale size/checksum metadata does not block deletion or overwrite
 - target path is not both a file and an ancestor
-- directory nodes do not have file blocks
+- directory nodes with accidental file blocks can still be removed safely
 
-If the graph is dirty, fail with `DataIntegrityError` or a repair-required
-subclass. The operation should not call `_release_blocks()` on a graph that may
-contain shared or mis-owned blocks.
+If the path tree itself is dirty, fail with `DataIntegrityError` or a
+repair-required subclass. The operation should not turn shared or mis-owned
+blocks into free blocks while another file still references them.
 
 Provide a management-only bypass only if a concrete recovery workflow needs it.
 

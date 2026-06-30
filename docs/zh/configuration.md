@@ -27,8 +27,8 @@
   - `"checksum"` 在 metadata 校验之外，再校验块和文件的 SHA-256
 
 需要在数据库损坏时快速失败的任务，建议使用 `"metadata"` 或
-`"checksum"`。即使全局读策略为 `"off"`，`copy_file()` 默认也会使用
-checksum 完整性校验。
+`"checksum"`。`copy_file()` 默认保持低开销复制路径；需要备份级复制时请传入
+`integrity="checksum"`。
 
 ## 修改块大小后的处理
 

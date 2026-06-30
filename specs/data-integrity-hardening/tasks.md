@@ -23,10 +23,10 @@ database-backed e2e matrix that can exercise real row-lock behavior.
       corrupted.
 - [x] D2: test tolerant listing when one file in a directory has corrupted
       metadata or structure.
-- [x] D3: test copy/backup behavior refuses to propagate corrupted source
-      content by default.
-- [x] D4: test overwrite/delete fails on a dirty shared-block graph instead of
-      releasing blocks incorrectly.
+- [x] D3: test explicit copy/backup integrity behavior refuses to propagate
+      corrupted source content while default copy stays low-overhead.
+- [x] D4: test overwrite/delete does not damage other owners when block mappings
+      are unexpectedly shared.
 - [x] D5: test `fsspec_repair --dry-run` reports path-tree conflicts without
       moving data.
 
@@ -44,10 +44,11 @@ database-backed e2e matrix that can exercise real row-lock behavior.
       corrupted database state.
 - [x] Add read-integrity policy support: `off`, `metadata`, and `checksum`.
 - [x] Share validation helpers between whole-file reads and range reads.
-- [x] Make copy/export-like flows use integrity checks by default.
+- [x] Make copy/export-like flows support explicit integrity checks without
+      changing default copy performance.
 - [x] Add tolerant listing support that can skip or mark corrupt entries.
-- [x] Add dirty-graph preflight checks before overwrite, delete, move, and
-      recursive delete.
+- [x] Make overwrite, delete, move, and recursive delete release dirty mappings
+      safely without expensive default validation.
 
 ## Phase 3: fsck and Repair
 

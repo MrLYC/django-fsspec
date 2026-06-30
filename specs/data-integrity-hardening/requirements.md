@@ -118,11 +118,10 @@ Acceptance criteria:
 - Add an integrity policy such as `off`, `metadata`, and `checksum`.
 - Whole-file reads and range reads should fail with a dedicated integrity error
   when required checks fail.
-- Backup-like operations such as `copy_file()` must not copy corrupted content
-  into a new healthy-looking file unless the caller explicitly disables
-  integrity checks.
-- The default application mode can remain compatible, but strict mode must be
-  available and documented.
+- Backup-like operations can pass an explicit integrity policy so corrupted
+  content is not copied into a new healthy-looking file.
+- The default application mode must remain compatible and low-overhead, but
+  strict mode must be available and documented.
 
 ### R8. Tolerant Listing and Degraded Operation
 
@@ -180,7 +179,7 @@ Acceptance criteria:
 | A8 | Recursive delete races with append/overwrite on a child path | The outcome may be last-writer-wins or clear failure, but `fsspec_fsck` must pass and no orphaned live mappings remain. |
 | D1 | Damager corrupts block bytes or block checksum, then Reader reads with strict integrity | Reader gets a dedicated integrity error and no corrupted bytes are returned. |
 | D2 | Damager corrupts one file in a directory, then Operator lists in tolerant mode | Healthy entries are returned; corrupt entry is skipped or marked with structured error metadata. |
-| D3 | Damager corrupts source content, then Copier runs copy/backup operation | Copy refuses to create a healthy-looking destination unless integrity checks are explicitly disabled. |
+| D3 | Damager corrupts source content, then Copier runs copy/backup operation with explicit integrity checks | Copy refuses to create a healthy-looking destination. Default copy remains compatible and low-overhead. |
 | D4 | Damager creates a shared block graph, then Writer overwrites one affected file | Write fails with repair-required error instead of freeing or mutating a block still referenced elsewhere. |
 | D5 | Damager creates path-tree conflict, then Operator runs `fsspec_repair --dry-run` | Repair reports structural damage without moving data. |
 

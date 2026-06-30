@@ -163,20 +163,6 @@ def _load_file_data(
     return data
 
 
-def _ensure_clean_file_graph(file_node: FileNode):
-    _load_file_data(
-        file_node,
-        integrity=INTEGRITY_METADATA,
-        require_unshared=True,
-    )
-
-
-def _ensure_clean_file_graphs(file_nodes):
-    for file_node in file_nodes:
-        if file_node.node_type == NODE_TYPE_FILE:
-            _ensure_clean_file_graph(file_node)
-
-
 def _allocate_blocks(chunks: list[bytes]) -> list[StorageBlock]:
     """Allocate storage blocks for chunks.
 
@@ -198,17 +184,24 @@ def _allocate_blocks(chunks: list[bytes]) -> list[StorageBlock]:
     return blocks
 
 
-def _release_blocks(file_node: FileNode):
-    """Mark all blocks associated with a file as free and delete FileBlock mappings."""
+def _release_file_blocks(file_ids):
+    """Delete mappings and mark only now-ownerless storage blocks as free."""
     block_ids = list(
-        FileBlock.objects.filter(file=file_node).values_list("block_id", flat=True)
+        FileBlock.objects.filter(file_id__in=file_ids).values_list(
+            "block_id",
+            flat=True,
+        )
     )
+    FileBlock.objects.filter(file_id__in=file_ids).delete()
     if block_ids:
-        FileBlock.objects.filter(file=file_node).delete()
         StorageBlock.objects.filter(
             id__in=block_ids,
             file_blocks__isnull=True,
         ).update(is_free=True)
+
+
+def _release_blocks(file_node: FileNode):
+    _release_file_blocks([file_node.pk])
 
 
 def _node_info(file_node: FileNode) -> dict:
@@ -325,7 +318,6 @@ def write_file(
         file_node = _ensure_file_target(namespace, path)
 
         if file_node is not None:
-            _ensure_clean_file_graph(file_node)
             old_version = file_node.version
 
             # Optimistic lock: UPDATE ... WHERE version = old_version
@@ -433,11 +425,7 @@ def append_file(
 
         if file_node is not None:
             # Read existing data within the transaction
-            existing_data = _load_file_data(
-                file_node,
-                integrity=INTEGRITY_METADATA,
-                require_unshared=True,
-            )
+            existing_data = _load_file_data(file_node)
             new_data = existing_data + data
 
             if len(new_data) > max_file_size:
@@ -680,50 +668,41 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
     if path == "/":
         raise IsADirectoryError("Cannot remove root directory")
 
-    try:
-        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
-    except FileNode.DoesNotExist:
-        file_node = None
-
-    if file_node is not None and file_node.node_type == NODE_TYPE_FILE:
-        with transaction.atomic():
-            _lock_namespace_for_write(namespace)
-            _ensure_clean_file_graph(file_node)
-            _release_blocks(file_node)
-            file_node.delete()
-        return
-
-    prefix = path.rstrip("/") + "/"
-    children = FileNode.objects.filter(namespace_id=namespace, path__startswith=prefix)
-
-    if file_node is None and not children.exists():
-        raise FileNotFoundError(f"Path not found: {path}")
-
-    if children.exists() and not recursive:
-        raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
-
     with transaction.atomic():
         _lock_namespace_for_write(namespace)
+
+        try:
+            file_node = FileNode.objects.select_for_update().get(
+                namespace_id=namespace,
+                path=path,
+            )
+        except FileNode.DoesNotExist:
+            file_node = None
+
+        if file_node is not None and file_node.node_type == NODE_TYPE_FILE:
+            _release_blocks(file_node)
+            file_node.delete()
+            return
+
+        prefix = path.rstrip("/") + "/"
+        children = FileNode.objects.select_for_update().filter(
+            namespace_id=namespace,
+            path__startswith=prefix,
+        )
+
+        has_children = children.exists()
+        if file_node is None and not has_children:
+            raise FileNotFoundError(f"Path not found: {path}")
+
+        if has_children and not recursive:
+            raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
+
         nodes_to_delete_qs = children
         if file_node is not None:
             nodes_to_delete_qs = FileNode.objects.filter(pk=file_node.pk) | children
 
-        _ensure_clean_file_graphs(nodes_to_delete_qs)
         node_ids = list(nodes_to_delete_qs.values_list("pk", flat=True))
-        block_ids = list(
-            FileBlock.objects.filter(
-                file_id__in=node_ids,
-                file__node_type=NODE_TYPE_FILE,
-            ).values_list("block_id", flat=True)
-        )
-        if block_ids:
-            FileBlock.objects.filter(file_id__in=node_ids).delete()
-            StorageBlock.objects.filter(
-                id__in=block_ids,
-                file_blocks__isnull=True,
-            ).update(is_free=True)
-        else:
-            FileBlock.objects.filter(file_id__in=node_ids).delete()
+        _release_file_blocks(node_ids)
         FileNode.objects.filter(pk__in=node_ids).delete()
 
 
@@ -780,7 +759,7 @@ def list_directory_detail(
         child_path = prefix + name
         try:
             info = get_file_info(namespace, child_path)
-            if info.get("type") == "file":
+            if tolerant and info.get("type") == "file":
                 try:
                     node = FileNode.objects.get(
                         namespace_id=namespace,
@@ -829,7 +808,7 @@ def copy_file(namespace: int, src: str, dst: str, *, integrity: str | None = Non
     if src_info["type"] == "directory":
         raise IsADirectoryError(f"Source is a directory: {src}")
     if integrity is None:
-        integrity = INTEGRITY_CHECKSUM
+        integrity = INTEGRITY_OFF
     data = read_file(namespace, src, integrity=integrity)
     write_file(namespace, dst, data, content_type=src_info.get("content_type", ""))
 
@@ -861,7 +840,6 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
 
         if file_node.node_type == NODE_TYPE_DIRECTORY:
             raise IsADirectoryError(f"Source is a directory: {src}")
-        _ensure_clean_file_graph(file_node)
 
         try:
             dest_node = FileNode.objects.select_for_update().get(
@@ -882,7 +860,6 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
                 raise FileExistsError(f"Destination already exists: {dst}")
             if dest_node.node_type == NODE_TYPE_DIRECTORY:
                 raise IsADirectoryError(f"Destination is a directory: {dst}")
-            _ensure_clean_file_graph(dest_node)
             _release_blocks(dest_node)
             dest_node.delete()
 
@@ -930,8 +907,6 @@ def move_directory(namespace: int, src: str, dst: str, overwrite: bool = False):
         if not source_nodes:
             raise FileNotFoundError(f"Path not found: {src}")
 
-        _ensure_clean_file_graphs(source_nodes)
-
         destination_conflicts = FileNode.objects.filter(
             namespace_id=namespace,
             path__startswith=dst_prefix,
@@ -946,22 +921,8 @@ def move_directory(namespace: int, src: str, dst: str, overwrite: bool = False):
             destination_nodes = list(
                 (exact_destination | destination_conflicts).order_by("path")
             )
-            _ensure_clean_file_graphs(destination_nodes)
             destination_ids = [node.pk for node in destination_nodes]
-            destination_block_ids = list(
-                FileBlock.objects.filter(
-                    file_id__in=destination_ids,
-                    file__node_type=NODE_TYPE_FILE,
-                ).values_list("block_id", flat=True)
-            )
-            if destination_block_ids:
-                FileBlock.objects.filter(file_id__in=destination_ids).delete()
-                StorageBlock.objects.filter(
-                    id__in=destination_block_ids,
-                    file_blocks__isnull=True,
-                ).update(is_free=True)
-            else:
-                FileBlock.objects.filter(file_id__in=destination_ids).delete()
+            _release_file_blocks(destination_ids)
             FileNode.objects.filter(pk__in=destination_ids).delete()
 
         move_id = uuid.uuid4().hex

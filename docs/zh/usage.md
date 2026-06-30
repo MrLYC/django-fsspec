@@ -28,12 +28,11 @@ fs.rmdir("/empty")       # 删除空的显式目录
 ```python
 fs.ls("/", detail=False)   # ["/file.txt", "/subdir"]
 fs.ls("/", detail=True)    # [{"name": "/file.txt", "size": 100, "type": "file"}, ...]
-fs.ls("/", detail=True, tolerant=True)  # 标记损坏子项，而不是中断整个 listing
+fs.ls("/", detail=True, tolerant=True)  # 校验并标记损坏子项
 ```
 
-普通详细 listing 对文件项使用严格模式：如果文件的持久化元数据或块图不一致，
-会抛出 `DataIntegrityError`。事故排查时可以使用 `tolerant=True`，这样健康
-条目仍会返回，损坏条目会以
+普通详细 listing 只返回元数据，不校验文件内容或块图。事故排查时可以使用
+`tolerant=True`，这样会校验条目，健康条目仍会返回，损坏条目会以
 `{"name": "/bad.txt", "type": "corrupt", "error": "..."}` 形式暴露。
 
 ## 删除
@@ -52,8 +51,13 @@ fs.mv("/src.txt", "/dst.txt")         # 移动（更新路径）
 fs.mv("/src", "/archive", recursive=True)  # 目录移动（重写元数据）
 ```
 
-`copy_file()` 默认会在写入新目标前校验源文件完整性，因此不会把损坏源文件复制
-成看起来健康的新文件。
+`copy_file()` 默认保持低开销兼容行为。备份类复制需要显式请求校验：
+
+```python
+from django_fsspec.operations import copy_file
+
+copy_file(1, "/src.txt", "/dst.txt", integrity="checksum")
+```
 
 递归 `fs.copy()` 是逐文件复制流程，不是时间点快照。如果复制过程中源文件被覆盖，
 结果就是每次文件操作当时看到的版本。不要把递归 copy 单独当作备份级快照。

@@ -28,8 +28,8 @@ All settings are read from Django's `settings.py` via `getattr` with defaults.
   - `"checksum"` includes metadata checks plus block and file SHA-256 checks
 
 Use `"metadata"` or `"checksum"` for jobs that must fail fast on damaged database
-state. `copy_file()` uses checksum integrity by default even when the global
-read policy is `"off"`.
+state. `copy_file()` keeps its default copy path low-overhead; pass
+`integrity="checksum"` when a copy must be backup-grade.
 
 ## Changing block size
 

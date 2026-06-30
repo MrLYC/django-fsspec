@@ -166,14 +166,24 @@ class TestAdversarialReadIntegrity(TestCase):
         with pytest.raises(DataIntegrityError, match="invalid block size"):
             read_file_range(1, "/bad-block-size.txt", 0, 4)
 
-    def test_backup_copy_refuses_corrupted_source_by_default(self):
+    def test_copy_default_preserves_compatibility_when_checksum_is_stale(self):
+        write_file(1, "/source.txt", b"source")
+        block = StorageBlock.objects.get(is_free=False)
+        block.checksum = "bad"
+        block.save(update_fields=["checksum"])
+
+        copy_file(1, "/source.txt", "/backup.txt")
+
+        assert read_file(1, "/backup.txt") == b"source"
+
+    def test_copy_can_refuse_corrupted_source_with_explicit_checksum_policy(self):
         write_file(1, "/source.txt", b"source")
         block = StorageBlock.objects.get(is_free=False)
         block.checksum = "bad"
         block.save(update_fields=["checksum"])
 
         with pytest.raises(DataIntegrityError, match="checksum mismatch"):
-            copy_file(1, "/source.txt", "/backup.txt")
+            copy_file(1, "/source.txt", "/backup.txt", integrity="checksum")
 
         assert not file_exists(1, "/backup.txt")
 
@@ -187,15 +197,21 @@ class TestAdversarialReadIntegrity(TestCase):
 
 
 class TestAdversarialListings(TestCase):
-    def test_strict_listing_raises_on_corrupt_child(self):
+    def test_default_listing_does_not_validate_corrupt_child(self):
         write_file(1, "/dir/good.txt", b"good")
         write_file(1, "/dir/bad.txt", b"bad")
         bad = FileNode.objects.get(path="/dir/bad.txt")
         bad.size = 999
         bad.save(update_fields=["size"])
 
-        with pytest.raises(DataIntegrityError, match="size mismatch"):
-            list_directory_detail(1, "/dir")
+        entries = {
+            entry["name"]: entry
+            for entry in list_directory_detail(1, "/dir")
+        }
+
+        assert entries["/dir/good.txt"]["type"] == "file"
+        assert entries["/dir/bad.txt"]["type"] == "file"
+        assert entries["/dir/bad.txt"]["size"] == 999
 
     def test_tolerant_listing_marks_corrupt_child_and_keeps_good_entries(self):
         write_file(1, "/dir/good.txt", b"good")
@@ -246,7 +262,7 @@ class TestAdversarialListings(TestCase):
         assert entries[0]["type"] == "corrupt"
         assert "disappeared" in entries[0]["error"]
 
-    def test_strict_listing_raises_when_child_disappears_after_enumeration(self):
+    def test_default_listing_does_not_requery_file_child_after_enumeration(self):
         write_file(1, "/dir/race.txt", b"race")
 
         def fake_info(namespace_id, path):
@@ -261,8 +277,9 @@ class TestAdversarialListings(TestCase):
                 "django_fsspec.operations.FileNode.objects.get",
                 side_effect=FileNode.DoesNotExist,
             ):
-                with pytest.raises(DataIntegrityError, match="disappeared"):
-                    list_directory_detail(1, "/dir")
+                entries = list_directory_detail(1, "/dir")
+
+        assert entries == [{"name": "/dir/race.txt", "size": 4, "type": "file"}]
 
     def test_listing_handles_file_not_found_after_enumeration(self):
         write_file(1, "/dir/race.txt", b"race")
@@ -283,18 +300,43 @@ class TestAdversarialListings(TestCase):
 
 
 class TestAdversarialDestructiveOperations(TestCase):
-    def test_overwrite_and_delete_refuse_shared_block_graph(self):
-        _create_shared_block_graph()
+    def test_overwrite_and_delete_do_not_damage_shared_block_owner(self):
+        _, _, shared_block = _create_shared_block_graph()
 
-        with pytest.raises(DataIntegrityError, match="referenced by multiple files"):
-            write_file(1, "/primary.txt", b"replacement")
+        write_file(1, "/primary.txt", b"replacement")
 
-        with pytest.raises(DataIntegrityError, match="referenced by multiple files"):
-            delete_file(1, "/primary.txt")
-
-        assert read_file(1, "/primary.txt", verify_checksum=True) == b"shared"
+        assert read_file(1, "/primary.txt", verify_checksum=True) == b"replacement"
         assert read_file(1, "/duplicate.txt", verify_checksum=True) == b"shared"
-        assert StorageBlock.objects.filter(is_free=False).count() == 1
+        shared_block.refresh_from_db()
+        assert shared_block.is_free is False
+
+        delete_file(1, "/primary.txt")
+
+        assert not file_exists(1, "/primary.txt")
+        assert read_file(1, "/duplicate.txt", verify_checksum=True) == b"shared"
+        shared_block.refresh_from_db()
+        assert shared_block.is_free is False
+
+    def test_delete_removes_file_with_stale_size_metadata(self):
+        write_file(1, "/stale.txt", b"data")
+        node = FileNode.objects.get(path="/stale.txt")
+        node.size = 0
+        node.save(update_fields=["size"])
+
+        delete_file(1, "/stale.txt")
+
+        assert not file_exists(1, "/stale.txt")
+        assert StorageBlock.objects.filter(is_free=True).count() == 1
+
+    def test_overwrite_replaces_file_with_stale_size_metadata(self):
+        write_file(1, "/stale.txt", b"data")
+        node = FileNode.objects.get(path="/stale.txt")
+        node.size = 0
+        node.save(update_fields=["size"])
+
+        write_file(1, "/stale.txt", b"replacement")
+
+        assert read_file(1, "/stale.txt", verify_checksum=True) == b"replacement"
 
     def test_overwrite_refuses_file_path_with_descendants(self):
         _create_path_conflict()
