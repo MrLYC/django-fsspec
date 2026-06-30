@@ -103,6 +103,8 @@ Backend fit in these results is straightforward: SQLite is appropriate for unit 
 
 Django version changes are measurable but not the main factor. In the latest CI run, MySQL 8.0 under Django 5.2 is about 6.1% lower latency on average than Django 4.2 across the measured table. PostgreSQL 16 under Django 5.2 is about 3.8% lower latency on average, with individual scenarios ranging from a small regression to a larger improvement.
 
+One interpretation detail matters for `medium` and `large`: the common read/write/delete/list/concurrency scenarios keep the same fixed operation counts as CI and reset the database before each scenario. The larger scale changes the seeded dataset size and seeded scenario repeat counts. That means the common read/write rows in the manual medium/large artifacts are useful for confirming normal operation behavior in the same workflow, while the seeded rows are the scale-sensitive large-table measurements.
+
 ## Detailed GitHub data
 
 CI-scale data was collected on GitHub Actions on 2026-06-30 from successful CI run [`28412676243`](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) at commit `2236341`. Medium and large seeded data was collected from manually triggered Large Benchmark runs on 2026-06-29. Those seeded runs are retained as the latest available large-table reference artifacts; compare them by scale and scenario rather than treating them as the same commit as the latest CI-scale table.
@@ -144,6 +146,26 @@ Format: average latency / throughput. Successful concurrent results include the 
 | `concurrent_read_8t` | 2.14ms / 467 ops/s | 3.19ms / 313 ops/s | 2.84ms / 353 ops/s | 2.73ms / 366 ops/s | 2.37ms / 423 ops/s | 3.16ms / 316 ops/s |
 | `concurrent_mixed_8t` | ERROR: database is locked | 5.11ms / 196 ops/s | 4.62ms / 216 ops/s | 4.30ms / 233 ops/s | 4.21ms / 237 ops/s | 4.58ms / 218 ops/s |
 
+### Medium common-operation results
+
+These rows come from the same `--scale medium --seed 1` artifacts as the seeded results. Common scenarios use the fixed operation counts from [Default CI scenarios](#default-ci-scenarios) and reset the database before each scenario, so they are not measured against the 10,000-file seeded tree.
+
+| Scenario | SQLite / Django 5.2.15 | MySQL 8.0 / Django 5.2.15 | PostgreSQL 16 / Django 5.2.15 | Oracle 23 / Django 5.2.15 |
+|----------|------------------------|----------------------------|--------------------------------|---------------------------|
+| `write_small` | 4.32ms / 232 ops/s | 7.98ms / 125 ops/s | 6.20ms / 161 ops/s | 6.41ms / 156 ops/s |
+| `write_medium` | 4.06ms / 246 ops/s | 8.44ms / 118 ops/s | 6.12ms / 164 ops/s | 6.91ms / 145 ops/s |
+| `write_large` | 8.09ms / 124 ops/s | 32.49ms / 31 ops/s | 28.17ms / 35 ops/s | 15.71ms / 64 ops/s |
+| `read_small` | 1.25ms / 800 ops/s | 2.53ms / 396 ops/s | 2.48ms / 402 ops/s | 2.54ms / 393 ops/s |
+| `read_large` | 1.76ms / 569 ops/s | 4.31ms / 232 ops/s | 8.58ms / 117 ops/s | 5.09ms / 196 ops/s |
+| `overwrite` | 4.57ms / 219 ops/s | 9.85ms / 102 ops/s | 7.77ms / 129 ops/s | 8.16ms / 123 ops/s |
+| `ls_flat_1000` | 3.97ms / 252 ops/s | 6.91ms / 145 ops/s | 6.51ms / 154 ops/s | 7.72ms / 130 ops/s |
+| `ls_nested_100dirs` | 3.79ms / 264 ops/s | 6.05ms / 165 ops/s | 6.33ms / 158 ops/s | 5.43ms / 184 ops/s |
+| `delete` | 2.51ms / 398 ops/s | 5.51ms / 181 ops/s | 3.65ms / 274 ops/s | 3.79ms / 264 ops/s |
+| `seek_read` | 1.42ms / 706 ops/s | 3.40ms / 295 ops/s | 4.98ms / 201 ops/s | 3.59ms / 278 ops/s |
+| `concurrent_write_8t` | ERROR: database is locked | 6.35ms / 157 ops/s | 4.90ms / 204 ops/s | 6.02ms / 166 ops/s |
+| `concurrent_read_8t` | 2.02ms / 495 ops/s | 2.95ms / 339 ops/s | 2.32ms / 430 ops/s | 3.20ms / 312 ops/s |
+| `concurrent_mixed_8t` | ERROR: database is locked | 4.12ms / 243 ops/s | 3.48ms / 288 ops/s | 3.93ms / 254 ops/s |
+
 ### Medium seeded results
 
 These runs use `--scale medium --seed 1`, which seeds 10,000 files across 100 directories. Dataset creation is excluded from the measured timings.
@@ -155,6 +177,26 @@ These runs use `--scale medium --seed 1`, which seeds 10,000 files across 100 di
 | `seeded_exists` | 0.99ms / 1014 ops/s | 2.07ms / 483 ops/s | 1.53ms / 652 ops/s | 0.85ms / 1171 ops/s |
 | `seeded_info` | 0.33ms / 3076 ops/s | 0.72ms / 1381 ops/s | 0.69ms / 1448 ops/s | 0.64ms / 1568 ops/s |
 | `seeded_find` | 122.00ms / 8 ops/s | 144.07ms / 7 ops/s | 100.83ms / 10 ops/s | 140.27ms / 7 ops/s |
+
+### Large common-operation results
+
+These rows come from the same `--scale large --seed 1` artifacts as the seeded results. Common scenarios again use fixed operation counts and reset the database before each scenario; they are included here so the manual large benchmark also shows normal read/write behavior.
+
+| Scenario | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
+|----------|--------|-----------|---------------|-----------|
+| `write_small` | 4.29ms / 233 ops/s | 7.83ms / 128 ops/s | 6.24ms / 160 ops/s | 6.82ms / 147 ops/s |
+| `write_medium` | 4.41ms / 227 ops/s | 8.23ms / 121 ops/s | 6.05ms / 165 ops/s | 7.11ms / 141 ops/s |
+| `write_large` | 8.26ms / 121 ops/s | 31.83ms / 31 ops/s | 29.08ms / 34 ops/s | 15.84ms / 63 ops/s |
+| `read_small` | 1.43ms / 700 ops/s | 2.53ms / 396 ops/s | 2.49ms / 402 ops/s | 2.79ms / 359 ops/s |
+| `read_large` | 1.84ms / 545 ops/s | 4.48ms / 223 ops/s | 8.56ms / 117 ops/s | 5.92ms / 169 ops/s |
+| `overwrite` | 4.92ms / 203 ops/s | 10.07ms / 99 ops/s | 7.89ms / 127 ops/s | 8.59ms / 116 ops/s |
+| `ls_flat_1000` | 4.28ms / 234 ops/s | 7.02ms / 142 ops/s | 6.29ms / 159 ops/s | 8.43ms / 119 ops/s |
+| `ls_nested_100dirs` | 4.03ms / 248 ops/s | 6.11ms / 164 ops/s | 6.31ms / 158 ops/s | 5.78ms / 173 ops/s |
+| `delete` | 2.71ms / 369 ops/s | 5.47ms / 183 ops/s | 3.79ms / 264 ops/s | 4.07ms / 246 ops/s |
+| `seek_read` | 1.58ms / 633 ops/s | 3.29ms / 304 ops/s | 4.81ms / 208 ops/s | 3.93ms / 254 ops/s |
+| `concurrent_write_8t` | ERROR: database is locked | 5.90ms / 170 ops/s | 5.10ms / 196 ops/s | 6.28ms / 159 ops/s |
+| `concurrent_read_8t` | 2.33ms / 430 ops/s | 2.88ms / 347 ops/s | 2.29ms / 437 ops/s | 3.38ms / 296 ops/s |
+| `concurrent_mixed_8t` | ERROR: database is locked | 4.07ms / 246 ops/s | 3.51ms / 285 ops/s | 4.31ms / 232 ops/s |
 
 ### Large seeded results
 
