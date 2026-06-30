@@ -6,6 +6,10 @@ class FileConflictError(DjangoFsspecError):
     """Raised when optimistic lock detects concurrent modification."""
 
 
+class DataIntegrityError(DjangoFsspecError, ValueError):
+    """Raised when persisted filesystem metadata or content is inconsistent."""
+
+
 class PathValidationError(DjangoFsspecError):
     """Raised when a path fails validation (illegal characters, traversal, etc.)."""
 

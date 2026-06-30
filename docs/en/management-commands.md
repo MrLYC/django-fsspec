@@ -39,6 +39,7 @@ Verify data integrity:
 ```bash
 python manage.py fsspec_fsck               # Check all
 python manage.py fsspec_fsck --namespace 1  # Check specific namespace
+python manage.py fsspec_fsck --json         # Machine-readable findings
 ```
 
 Checks performed:
@@ -48,6 +49,10 @@ Checks performed:
 - File size matches reassembled content length
 - Block sequence numbers are contiguous
 - No file blocks point to free storage blocks
+- No file path also has descendants
+- Directory nodes have no block mappings or payload metadata
+- Persisted paths and node types are valid
+- Storage blocks are not referenced by more than one file
 
 Example output:
 ```
@@ -60,6 +65,16 @@ Checking for orphaned blocks...
 Filesystem check passed. No errors found.
 ```
 
+JSON output returns `{"ok": false, "findings": [...]}` and each finding includes
+`severity`, `code`, `message`, and relevant ids. Severities are:
+
+| Severity | Meaning |
+|----------|---------|
+| `warning` | Suspicious but not known to corrupt current reads |
+| `recoverable` | Safe repair exists and can be previewed |
+| `unresolved` | Requires an explicit recovery policy or backup restore |
+| `critical` | Stop normal writes until investigated |
+
 ## fsspec_repair — Best-Effort Repair
 
 Repair recoverable database damage with one command:
@@ -68,14 +83,19 @@ Repair recoverable database damage with one command:
 python manage.py fsspec_repair --dry-run
 python manage.py fsspec_repair
 python manage.py fsspec_repair --namespace 1
+python manage.py fsspec_repair --recover-path-conflicts
 ```
 
 Recommended incident flow:
 
 1. Back up the database, or run against a restored copy first.
 2. Run `python manage.py fsspec_repair --dry-run` to see the planned changes.
-3. Run `python manage.py fsspec_repair` to apply repairs.
-4. Run `python manage.py fsspec_fsck` to verify the result.
+3. If `path_conflicts` is reported, inspect the output and decide whether moving
+   descendants to the recovery prefix is acceptable.
+4. Run `python manage.py fsspec_repair` to apply safe repairs.
+5. Run `python manage.py fsspec_repair --recover-path-conflicts` only after a
+   backup when you explicitly want descendants moved under the recovery prefix.
+6. Run `python manage.py fsspec_fsck` to verify the result.
 
 What it can repair:
 
@@ -87,12 +107,16 @@ What it can repair:
 | `FileBlock.sequence` has gaps or starts at the wrong number | Renumbers existing mappings to contiguous `0..N-1` order |
 | A directory row has block mappings or payload metadata | Removes impossible mappings and resets directory size/checksum |
 | A used block has no remaining `FileBlock` owner | Marks it free during a global repair |
+| A file path also has descendants | Reports `path_conflicts`; with `--recover-path-conflicts`, moves descendants to `/__django_fsspec_recovered__/conflicts/<namespace>/<timestamp>/...` |
 
 Limits:
 
 - The command cannot recreate bytes that were deleted or overwritten in `StorageBlock.data`.
 - If `FileBlock` rows were deleted, the remaining orphaned block bytes no longer have a trustworthy path owner. The repair keeps the database consistent by recomputing the file from still-mapped blocks and freeing orphaned blocks.
 - If block mappings were reordered while still keeping contiguous sequence numbers, there is no authoritative database signal for the original order. Restore from backup when original byte order matters.
+- Shared storage blocks and invalid persisted paths are reported as unresolved
+  damage. They are not automatically mutated because ownership or a valid target
+  path cannot be proven from the damaged rows alone.
 - Run with `--namespace` to limit file and mapping repairs to one namespace. Global orphan cleanup only runs when no namespace filter is supplied.
 
 Example output:
@@ -107,6 +131,10 @@ directory_mappings: 0
 directory_metadata: 0
 file_sequences: 1
 file_metadata: 2
+path_conflicts: 0
+moved_descendants: 0
+shared_blocks: 0
+invalid_paths: 0
 
 Applied 6 repair actions. Run fsspec_fsck to verify.
 ```

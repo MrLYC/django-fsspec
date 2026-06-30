@@ -16,6 +16,21 @@ All settings are read from Django's `settings.py` via `getattr` with defaults.
 - **Impact**: Writes exceeding this limit raise `FileTooLargeError`
 - **Relationship to block_size**: Independent — these two settings don't affect each other
 
+## DJANGO_FSSPEC_READ_INTEGRITY
+
+- **Default**: `"off"`
+- **Allowed values**: `"off"`, `"metadata"`, `"checksum"`
+- **Description**: Default integrity policy for `read_file()` when no explicit
+  policy is provided
+- **Impact**:
+  - `"off"` preserves compatibility and reads mapped bytes without extra checks
+  - `"metadata"` verifies file/block shape, sizes, sequence continuity, and live block flags
+  - `"checksum"` includes metadata checks plus block and file SHA-256 checks
+
+Use `"metadata"` or `"checksum"` for jobs that must fail fast on damaged database
+state. `copy_file()` uses checksum integrity by default even when the global
+read policy is `"off"`.
+
 ## Changing block size
 
 After changing `DJANGO_FSSPEC_BLOCK_SIZE`:

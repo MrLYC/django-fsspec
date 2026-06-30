@@ -4,7 +4,12 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
 from .. import operations
-from ..exceptions import FileConflictError, FileTooLargeError, PathValidationError
+from ..exceptions import (
+    DataIntegrityError,
+    FileConflictError,
+    FileTooLargeError,
+    PathValidationError,
+)
 from ..fs import DjangoFileSystem
 from . import responses
 from .permissions import has_namespace_perm
@@ -96,6 +101,10 @@ class WebDAVView(View):
             )
         except FileConflictError as exc:
             return responses.error_response(409, "conflict", str(exc), path=path)
+        except DataIntegrityError as exc:
+            return responses.error_response(
+                409, "data_integrity_error", str(exc), path=path
+            )
         except ValueError as exc:
             return responses.error_response(
                 400, "invalid_request", str(exc), path=path

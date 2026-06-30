@@ -1,4 +1,5 @@
 from collections import deque
+import threading
 
 from django.db import transaction as db_transaction
 from fsspec.implementations.local import trailing_sep
@@ -78,15 +79,37 @@ class DjangoFileSystem(AbstractFileSystem):
     def __init__(self, namespace_id=1, **kwargs):
         if "namespace" in kwargs:
             raise TypeError("Use namespace_id, not namespace")
+        self._thread_state = threading.local()
         super().__init__(**kwargs)
         self.namespace = namespace_id
 
+    @property
+    def _intrans(self):
+        return getattr(self._thread_state, "intrans", False)
+
+    @_intrans.setter
+    def _intrans(self, value):
+        self._thread_state.intrans = value
+
+    @property
+    def _transaction(self):
+        return getattr(self._thread_state, "transaction", None)
+
+    @_transaction.setter
+    def _transaction(self, value):
+        self._thread_state.transaction = value
+
     def ls(self, path, detail=True, **kwargs):
         path = self._strip_protocol(path)
+        tolerant = kwargs.get("tolerant", False)
         if not path or path == "/":
             entries = operations.list_directory(self.namespace, "/")
             if detail:
-                return operations.list_directory_detail(self.namespace, "/")
+                return operations.list_directory_detail(
+                    self.namespace,
+                    "/",
+                    tolerant=tolerant,
+                )
             return ["/" + name for name in entries]
 
         # Check if path is a file
@@ -105,7 +128,11 @@ class DjangoFileSystem(AbstractFileSystem):
 
         prefix = path.rstrip("/") + "/"
         if detail:
-            return operations.list_directory_detail(self.namespace, path)
+            return operations.list_directory_detail(
+                self.namespace,
+                path,
+                tolerant=tolerant,
+            )
         return [prefix + name for name in entries]
 
     def info(self, path, **kwargs):
@@ -215,15 +242,14 @@ class DjangoFileSystem(AbstractFileSystem):
         if path1 == path2:
             return
         if recursive or self.isdir(path1):
-            self.copy(
+            if trailing_sep(path2) or self.isdir(path2):
+                path2 = path2.rstrip("/") + "/" + path1.rstrip("/").rsplit("/", 1)[-1]
+            operations.move_directory(
+                self.namespace,
                 path1,
                 path2,
-                recursive=True,
-                maxdepth=maxdepth,
-                on_error="raise",
-                **kwargs,
+                overwrite=kwargs.get("overwrite", False),
             )
-            self.rm(path1, recursive=True, maxdepth=maxdepth)
             return
         if trailing_sep(path2) or self.isdir(path2):
             path2 = path2.rstrip("/") + "/" + path1.rsplit("/", 1)[-1]

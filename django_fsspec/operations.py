@@ -1,10 +1,17 @@
 import hashlib
+import uuid
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Case, F, Value, When
+from django.db.models import Case, Count, F, Value, When
 from django.db.models.functions import StrIndex, Substr
 
-from .exceptions import FileConflictError, FileTooLargeError, NamespaceNotFoundError
+from .exceptions import (
+    DataIntegrityError,
+    FileConflictError,
+    FileTooLargeError,
+    NamespaceNotFoundError,
+)
 from .models import (
     NODE_TYPE_DIRECTORY,
     NODE_TYPE_FILE,
@@ -17,13 +24,157 @@ from .models import (
 )
 from .validators import validate_path
 
+INTEGRITY_OFF = "off"
+INTEGRITY_METADATA = "metadata"
+INTEGRITY_CHECKSUM = "checksum"
+INTEGRITY_POLICIES = {INTEGRITY_OFF, INTEGRITY_METADATA, INTEGRITY_CHECKSUM}
+
 
 def _compute_checksum(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _get_read_integrity(integrity: str | None = None, *, verify_checksum=False) -> str:
+    if verify_checksum:
+        return INTEGRITY_CHECKSUM
+    if integrity is None:
+        integrity = getattr(settings, "DJANGO_FSSPEC_READ_INTEGRITY", INTEGRITY_OFF)
+    if integrity not in INTEGRITY_POLICIES:
+        raise ValueError(
+            "DJANGO_FSSPEC_READ_INTEGRITY must be one of "
+            f"{sorted(INTEGRITY_POLICIES)}, got {integrity!r}"
+        )
+    return integrity
+
+
 def _chunk_data(data: bytes, block_size: int) -> list[bytes]:
     return [data[i : i + block_size] for i in range(0, len(data), block_size)]
+
+
+def _lock_namespace_for_write(namespace: int) -> Namespace:
+    try:
+        return Namespace.objects.select_for_update().get(pk=namespace)
+    except Namespace.DoesNotExist:
+        raise NamespaceNotFoundError(f"Namespace not found: {namespace}")
+
+
+def _path_has_descendants(namespace: int, path: str, *, exclude_pk=None) -> bool:
+    if path == "/":
+        return False
+    descendants = FileNode.objects.filter(
+        namespace_id=namespace,
+        path__startswith=path.rstrip("/") + "/",
+    )
+    if exclude_pk is not None:
+        descendants = descendants.exclude(pk=exclude_pk)
+    return descendants.exists()
+
+
+def _validate_file_node_type(file_node: FileNode):
+    if file_node.node_type != NODE_TYPE_FILE:
+        raise IsADirectoryError(f"Path is a directory: {file_node.path}")
+
+
+def _ordered_file_blocks(file_node: FileNode):
+    return list(
+        FileBlock.objects.filter(file=file_node)
+        .select_related("block")
+        .order_by("sequence", "id")
+    )
+
+
+def _load_file_data(
+    file_node: FileNode,
+    *,
+    integrity: str = INTEGRITY_OFF,
+    require_unshared: bool = False,
+) -> bytes:
+    _validate_file_node_type(file_node)
+
+    file_blocks = _ordered_file_blocks(file_node)
+    parts = []
+    for file_block in file_blocks:
+        parts.append(bytes(file_block.block.data))
+    data = b"".join(parts)
+
+    if integrity == INTEGRITY_OFF and not require_unshared:
+        return data
+
+    if _path_has_descendants(
+        file_node.namespace_id,
+        file_node.path,
+        exclude_pk=file_node.pk,
+    ):
+        raise DataIntegrityError(
+            f"File {file_node.path} has descendant paths; run fsspec_repair --dry-run"
+        )
+
+    sequences = [file_block.sequence for file_block in file_blocks]
+    expected_sequences = list(range(len(file_blocks)))
+    if sequences != expected_sequences:
+        raise DataIntegrityError(
+            f"File {file_node.path} has non-contiguous block sequences: {sequences}"
+        )
+
+    for file_block, block_data in zip(file_blocks, parts):
+        block = file_block.block
+        if block.is_free:
+            raise DataIntegrityError(
+                f"File {file_node.path} references free block {block.pk}"
+            )
+        if block.size != len(block_data):
+            raise DataIntegrityError(
+                f"Block {block.pk} size mismatch: stored={block.size}, "
+                f"actual={len(block_data)}"
+            )
+        if require_unshared:
+            shared = (
+                FileBlock.objects.filter(block=block)
+                .exclude(file=file_node)
+                .exists()
+            )
+            if shared:
+                raise DataIntegrityError(
+                    f"Block {block.pk} is referenced by multiple files; "
+                    "run fsspec_repair --dry-run"
+                )
+        if integrity == INTEGRITY_CHECKSUM and block.checksum:
+            actual = _compute_checksum(block_data)
+            if actual != block.checksum:
+                raise DataIntegrityError(
+                    f"Block {block.pk} checksum mismatch: "
+                    f"expected {block.checksum}, got {actual}"
+                )
+
+    if file_node.size != len(data):
+        raise DataIntegrityError(
+            f"File {file_node.path} size mismatch: stored={file_node.size}, "
+            f"actual={len(data)}"
+        )
+
+    if integrity == INTEGRITY_CHECKSUM and file_node.checksum:
+        actual = _compute_checksum(data)
+        if actual != file_node.checksum:
+            raise DataIntegrityError(
+                f"File {file_node.path} checksum mismatch: "
+                f"expected {file_node.checksum}, got {actual}"
+            )
+
+    return data
+
+
+def _ensure_clean_file_graph(file_node: FileNode):
+    _load_file_data(
+        file_node,
+        integrity=INTEGRITY_METADATA,
+        require_unshared=True,
+    )
+
+
+def _ensure_clean_file_graphs(file_nodes):
+    for file_node in file_nodes:
+        if file_node.node_type == NODE_TYPE_FILE:
+            _ensure_clean_file_graph(file_node)
 
 
 def _allocate_blocks(chunks: list[bytes]) -> list[StorageBlock]:
@@ -53,8 +204,11 @@ def _release_blocks(file_node: FileNode):
         FileBlock.objects.filter(file=file_node).values_list("block_id", flat=True)
     )
     if block_ids:
-        StorageBlock.objects.filter(id__in=block_ids).update(is_free=True)
         FileBlock.objects.filter(file=file_node).delete()
+        StorageBlock.objects.filter(
+            id__in=block_ids,
+            file_blocks__isnull=True,
+        ).update(is_free=True)
 
 
 def _node_info(file_node: FileNode) -> dict:
@@ -69,6 +223,7 @@ def _node_info(file_node: FileNode) -> dict:
         }
 
     return {
+        "id": file_node.pk,
         "name": file_node.path,
         "size": file_node.size,
         "type": "file",
@@ -84,11 +239,6 @@ def _node_info(file_node: FileNode) -> dict:
 def _reject_root_file_path(path: str):
     if path == "/":
         raise IsADirectoryError("Root is a directory")
-
-
-def _ensure_namespace_exists(namespace: int):
-    if not Namespace.objects.filter(pk=namespace).exists():
-        raise NamespaceNotFoundError(f"Namespace not found: {namespace}")
 
 
 def _ancestor_paths(path: str) -> list[str]:
@@ -144,6 +294,10 @@ def _ensure_file_target(namespace: int, path: str):
 
     if file_node.node_type == NODE_TYPE_DIRECTORY:
         raise IsADirectoryError(f"Path is a directory: {path}")
+    if _path_has_descendants(namespace, path, exclude_pk=file_node.pk):
+        raise DataIntegrityError(
+            f"File path has descendants: {path}; run fsspec_repair --dry-run"
+        )
     return file_node
 
 
@@ -155,8 +309,6 @@ def write_file(
     """
     path = validate_path(path)
     _reject_root_file_path(path)
-    _ensure_namespace_exists(namespace)
-    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
         raise FileTooLargeError(
@@ -168,9 +320,12 @@ def write_file(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+        _ensure_parent_directory(namespace, path)
         file_node = _ensure_file_target(namespace, path)
 
         if file_node is not None:
+            _ensure_clean_file_graph(file_node)
             old_version = file_node.version
 
             # Optimistic lock: UPDATE ... WHERE version = old_version
@@ -217,8 +372,6 @@ def create_file_exclusive(
     """Create a file exclusively. Raises FileExistsError if it already exists."""
     path = validate_path(path)
     _reject_root_file_path(path)
-    _ensure_namespace_exists(namespace)
-    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     if len(data) > max_file_size:
         raise FileTooLargeError(
@@ -230,6 +383,8 @@ def create_file_exclusive(
     file_checksum = _compute_checksum(data)
 
     with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+        _ensure_parent_directory(namespace, path)
         if _ensure_file_target(namespace, path) is not None:
             raise FileExistsError(f"File already exists: {path}")
 
@@ -268,22 +423,21 @@ def append_file(
     """
     path = validate_path(path)
     _reject_root_file_path(path)
-    _ensure_namespace_exists(namespace)
-    _ensure_parent_directory(namespace, path)
     max_file_size = get_max_file_size()
     block_size = get_block_size()
 
     with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+        _ensure_parent_directory(namespace, path)
         file_node = _ensure_file_target(namespace, path)
 
         if file_node is not None:
             # Read existing data within the transaction
-            file_blocks = (
-                FileBlock.objects.filter(file=file_node)
-                .select_related("block")
-                .order_by("sequence")
+            existing_data = _load_file_data(
+                file_node,
+                integrity=INTEGRITY_METADATA,
+                require_unshared=True,
             )
-            existing_data = b"".join(fb.block.data for fb in file_blocks)
             new_data = existing_data + data
 
             if len(new_data) > max_file_size:
@@ -343,7 +497,12 @@ def append_file(
     return file_node
 
 
-def read_file(namespace: int, path: str, verify_checksum: bool = False) -> bytes:
+def read_file(
+    namespace: int,
+    path: str,
+    verify_checksum: bool = False,
+    integrity: str | None = None,
+) -> bytes:
     """Read entire file content.
 
     Parameters
@@ -359,53 +518,48 @@ def read_file(namespace: int, path: str, verify_checksum: bool = False) -> bytes
     except FileNode.DoesNotExist:
         raise FileNotFoundError(f"File not found: {path}")
 
-    if file_node.node_type == NODE_TYPE_DIRECTORY:
-        raise IsADirectoryError(f"Path is a directory: {path}")
-
-    file_blocks = (
-        FileBlock.objects.filter(file=file_node)
-        .select_related("block")
-        .order_by("sequence")
-    )
-
-    parts = []
-    for fb in file_blocks:
-        block_data = bytes(fb.block.data)
-        if verify_checksum and fb.block.checksum:
-            actual = _compute_checksum(block_data)
-            if actual != fb.block.checksum:
-                raise ValueError(
-                    f"Block {fb.block.pk} checksum mismatch: "
-                    f"expected {fb.block.checksum}, got {actual}"
-                )
-        parts.append(block_data)
-
-    data = b"".join(parts)
-
-    if verify_checksum and file_node.checksum:
-        actual = _compute_checksum(data)
-        if actual != file_node.checksum:
-            raise ValueError(
-                f"File {path} checksum mismatch: "
-                f"expected {file_node.checksum}, got {actual}"
-            )
-
-    return data
+    policy = _get_read_integrity(integrity, verify_checksum=verify_checksum)
+    return _load_file_data(file_node, integrity=policy)
 
 
-def read_file_range(namespace: int, path: str, start: int, end: int) -> bytes:
+def read_file_range(
+    namespace: int,
+    path: str,
+    start: int,
+    end: int,
+    *,
+    integrity: str | None = None,
+    file_id: int | None = None,
+    version: int | None = None,
+) -> bytes:
     """Read a byte range [start, end) from a file."""
     path = validate_path(path)
 
     try:
-        file_node = FileNode.objects.get(namespace_id=namespace, path=path)
+        if file_id is not None:
+            file_node = FileNode.objects.get(namespace_id=namespace, pk=file_id)
+        else:
+            file_node = FileNode.objects.get(namespace_id=namespace, path=path)
     except FileNode.DoesNotExist:
         raise FileNotFoundError(f"File not found: {path}")
 
     if file_node.node_type == NODE_TYPE_DIRECTORY:
         raise IsADirectoryError(f"Path is a directory: {path}")
+    if version is not None and file_node.version != version:
+        raise FileConflictError(
+            f"File was modified while reading: {path}"
+        )
+
+    policy = _get_read_integrity(integrity)
+    if policy != INTEGRITY_OFF:
+        data = _load_file_data(file_node, integrity=policy)
+        return data[start:end]
 
     block_size = file_node.block_size
+    if block_size <= 0:
+        raise DataIntegrityError(
+            f"File {path} has invalid block size: {block_size}"
+        )
     start_block = start // block_size
     end_block = (end - 1) // block_size if end > 0 else 0
 
@@ -466,40 +620,42 @@ def make_directory(namespace: int, path: str, create_parents: bool = False) -> F
     path = validate_path(path)
     if path == "/":
         raise FileExistsError("Root directory already exists")
-    _ensure_namespace_exists(namespace)
 
-    existing = FileNode.objects.filter(namespace_id=namespace, path=path).first()
-    if existing is not None:
-        if existing.node_type == NODE_TYPE_DIRECTORY:
+    with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+
+        existing = FileNode.objects.filter(namespace_id=namespace, path=path).first()
+        if existing is not None:
+            if existing.node_type == NODE_TYPE_DIRECTORY:
+                raise FileExistsError(f"Directory already exists: {path}")
+            raise FileExistsError(f"File already exists: {path}")
+
+        if FileNode.objects.filter(
+            namespace_id=namespace, path__startswith=path.rstrip("/") + "/"
+        ).exists():
             raise FileExistsError(f"Directory already exists: {path}")
-        raise FileExistsError(f"File already exists: {path}")
 
-    if FileNode.objects.filter(
-        namespace_id=namespace, path__startswith=path.rstrip("/") + "/"
-    ).exists():
-        raise FileExistsError(f"Directory already exists: {path}")
-
-    parent = path.rsplit("/", 1)[0] or "/"
-    if parent != "/":
-        try:
-            parent_info = get_file_info(namespace, parent)
-        except FileNotFoundError:
-            if create_parents:
-                make_directory(namespace, parent, create_parents=True)
+        parent = path.rsplit("/", 1)[0] or "/"
+        if parent != "/":
+            try:
+                parent_info = get_file_info(namespace, parent)
+            except FileNotFoundError:
+                if create_parents:
+                    make_directory(namespace, parent, create_parents=True)
+                else:
+                    raise FileNotFoundError(f"Parent directory not found: {parent}")
             else:
-                raise FileNotFoundError(f"Parent directory not found: {parent}")
-        else:
-            if parent_info["type"] != "directory":
-                raise NotADirectoryError(f"Parent is not a directory: {parent}")
+                if parent_info["type"] != "directory":
+                    raise NotADirectoryError(f"Parent is not a directory: {parent}")
 
-    return FileNode.objects.create(
-        namespace_id=namespace,
-        path=path,
-        node_type=NODE_TYPE_DIRECTORY,
-        size=0,
-        checksum="",
-        content_type="",
-    )
+        return FileNode.objects.create(
+            namespace_id=namespace,
+            path=path,
+            node_type=NODE_TYPE_DIRECTORY,
+            size=0,
+            checksum="",
+            content_type="",
+        )
 
 
 def remove_directory(namespace: int, path: str, recursive: bool = False):
@@ -531,6 +687,8 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
 
     if file_node is not None and file_node.node_type == NODE_TYPE_FILE:
         with transaction.atomic():
+            _lock_namespace_for_write(namespace)
+            _ensure_clean_file_graph(file_node)
             _release_blocks(file_node)
             file_node.delete()
         return
@@ -545,10 +703,12 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
         raise IsADirectoryError(f"Path is a directory, use recursive=True: {path}")
 
     with transaction.atomic():
+        _lock_namespace_for_write(namespace)
         nodes_to_delete_qs = children
         if file_node is not None:
             nodes_to_delete_qs = FileNode.objects.filter(pk=file_node.pk) | children
 
+        _ensure_clean_file_graphs(nodes_to_delete_qs)
         node_ids = list(nodes_to_delete_qs.values_list("pk", flat=True))
         block_ids = list(
             FileBlock.objects.filter(
@@ -557,8 +717,13 @@ def delete_file(namespace: int, path: str, recursive: bool = False):
             ).values_list("block_id", flat=True)
         )
         if block_ids:
-            StorageBlock.objects.filter(id__in=block_ids).update(is_free=True)
-        FileBlock.objects.filter(file_id__in=node_ids).delete()
+            FileBlock.objects.filter(file_id__in=node_ids).delete()
+            StorageBlock.objects.filter(
+                id__in=block_ids,
+                file_blocks__isnull=True,
+            ).update(is_free=True)
+        else:
+            FileBlock.objects.filter(file_id__in=node_ids).delete()
         FileNode.objects.filter(pk__in=node_ids).delete()
 
 
@@ -596,7 +761,12 @@ def list_directory(namespace: int, path: str) -> list[str]:
     )
 
 
-def list_directory_detail(namespace: int, path: str) -> list[dict]:
+def list_directory_detail(
+    namespace: int,
+    path: str,
+    *,
+    tolerant: bool = False,
+) -> list[dict]:
     """List immediate children with detail (name, size, type)."""
     children = list_directory(namespace, path)
 
@@ -610,25 +780,57 @@ def list_directory_detail(namespace: int, path: str) -> list[dict]:
         child_path = prefix + name
         try:
             info = get_file_info(namespace, child_path)
+            if info.get("type") == "file":
+                try:
+                    node = FileNode.objects.get(
+                        namespace_id=namespace,
+                        path=child_path,
+                    )
+                    _load_file_data(node, integrity=INTEGRITY_METADATA)
+                except DataIntegrityError as exc:
+                    if not tolerant:
+                        raise
+                    info = _corrupt_child_info(child_path, exc)
+                except FileNode.DoesNotExist as exc:
+                    integrity_error = DataIntegrityError(
+                        f"Directory child disappeared while listing: {child_path}"
+                    )
+                    if not tolerant:
+                        raise integrity_error from exc
+                    info = _corrupt_child_info(child_path, integrity_error)
             result.append(info)
-        except FileNotFoundError:
-            # Implicit directory
-            result.append(
-                {
-                    "name": child_path,
-                    "size": 0,
-                    "type": "directory",
-                }
-            )
+        except FileNotFoundError as exc:
+            if tolerant:
+                result.append(_corrupt_child_info(child_path, exc))
+            else:
+                # Implicit directory
+                result.append(
+                    {
+                        "name": child_path,
+                        "size": 0,
+                        "type": "directory",
+                    }
+                )
     return result
 
 
-def copy_file(namespace: int, src: str, dst: str):
+def _corrupt_child_info(child_path: str, exc: Exception) -> dict:
+    return {
+        "name": child_path,
+        "size": 0,
+        "type": "corrupt",
+        "error": str(exc),
+    }
+
+
+def copy_file(namespace: int, src: str, dst: str, *, integrity: str | None = None):
     """Copy a file from src to dst (no block reuse, copies data)."""
     src_info = get_file_info(namespace, src)
     if src_info["type"] == "directory":
         raise IsADirectoryError(f"Source is a directory: {src}")
-    data = read_file(namespace, src)
+    if integrity is None:
+        integrity = INTEGRITY_CHECKSUM
+    data = read_file(namespace, src, integrity=integrity)
     write_file(namespace, dst, data, content_type=src_info.get("content_type", ""))
 
 
@@ -640,9 +842,10 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
     _reject_root_file_path(dst)
     if src == dst:
         return
-    _ensure_parent_directory(namespace, dst)
 
     with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+        _ensure_parent_directory(namespace, dst)
         try:
             file_node = FileNode.objects.select_for_update().get(
                 namespace_id=namespace,
@@ -658,6 +861,7 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
 
         if file_node.node_type == NODE_TYPE_DIRECTORY:
             raise IsADirectoryError(f"Source is a directory: {src}")
+        _ensure_clean_file_graph(file_node)
 
         try:
             dest_node = FileNode.objects.select_for_update().get(
@@ -678,8 +882,99 @@ def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
                 raise FileExistsError(f"Destination already exists: {dst}")
             if dest_node.node_type == NODE_TYPE_DIRECTORY:
                 raise IsADirectoryError(f"Destination is a directory: {dst}")
+            _ensure_clean_file_graph(dest_node)
             _release_blocks(dest_node)
             dest_node.delete()
 
         file_node.path = dst
         file_node.save(update_fields=["path", "updated_at"])
+
+
+def move_directory(namespace: int, src: str, dst: str, overwrite: bool = False):
+    """Move a durable or implicit directory by rewriting FileNode paths."""
+    src = validate_path(src)
+    dst = validate_path(dst)
+    _reject_root_file_path(src)
+    _reject_root_file_path(dst)
+    if src == dst:
+        return
+
+    src_prefix = src.rstrip("/") + "/"
+    dst_prefix = dst.rstrip("/") + "/"
+    if dst == src or dst.startswith(src_prefix):
+        raise ValueError(f"Cannot move directory into itself: {src} -> {dst}")
+
+    with transaction.atomic():
+        _lock_namespace_for_write(namespace)
+        _ensure_parent_directory(namespace, dst)
+
+        try:
+            source_node = FileNode.objects.select_for_update().get(
+                namespace_id=namespace,
+                path=src,
+            )
+        except FileNode.DoesNotExist:
+            source_node = None
+
+        if source_node is not None and source_node.node_type == NODE_TYPE_FILE:
+            raise NotADirectoryError(f"Source is not a directory: {src}")
+
+        source_qs = FileNode.objects.select_for_update().filter(
+            namespace_id=namespace,
+            path__startswith=src_prefix,
+        )
+        if source_node is not None:
+            source_qs = FileNode.objects.filter(pk=source_node.pk) | source_qs
+
+        source_nodes = list(source_qs.order_by("path"))
+        if not source_nodes:
+            raise FileNotFoundError(f"Path not found: {src}")
+
+        _ensure_clean_file_graphs(source_nodes)
+
+        destination_conflicts = FileNode.objects.filter(
+            namespace_id=namespace,
+            path__startswith=dst_prefix,
+        )
+        exact_destination = FileNode.objects.filter(
+            namespace_id=namespace,
+            path=dst,
+        )
+        if exact_destination.exists() or destination_conflicts.exists():
+            if not overwrite:
+                raise FileExistsError(f"Destination already exists: {dst}")
+            destination_nodes = list(
+                (exact_destination | destination_conflicts).order_by("path")
+            )
+            _ensure_clean_file_graphs(destination_nodes)
+            destination_ids = [node.pk for node in destination_nodes]
+            destination_block_ids = list(
+                FileBlock.objects.filter(
+                    file_id__in=destination_ids,
+                    file__node_type=NODE_TYPE_FILE,
+                ).values_list("block_id", flat=True)
+            )
+            if destination_block_ids:
+                FileBlock.objects.filter(file_id__in=destination_ids).delete()
+                StorageBlock.objects.filter(
+                    id__in=destination_block_ids,
+                    file_blocks__isnull=True,
+                ).update(is_free=True)
+            else:
+                FileBlock.objects.filter(file_id__in=destination_ids).delete()
+            FileNode.objects.filter(pk__in=destination_ids).delete()
+
+        move_id = uuid.uuid4().hex
+        temp_prefix = f"/__django_fsspec_tmp_move_{move_id}"
+        path_map = {}
+        for node in source_nodes:
+            if node.path == src:
+                new_path = dst
+            else:
+                new_path = dst.rstrip("/") + node.path[len(src.rstrip("/")):]
+            path_map[node.pk] = new_path
+            temp_path = temp_prefix + node.path[len(src.rstrip("/")):]
+            FileNode.objects.filter(pk=node.pk).update(path=temp_path)
+
+        for node in source_nodes:
+            FileNode.objects.filter(pk=node.pk).update(path=path_map[node.pk])

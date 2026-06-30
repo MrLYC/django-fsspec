@@ -28,7 +28,13 @@ fs.rmdir("/empty")       # 删除空的显式目录
 ```python
 fs.ls("/", detail=False)   # ["/file.txt", "/subdir"]
 fs.ls("/", detail=True)    # [{"name": "/file.txt", "size": 100, "type": "file"}, ...]
+fs.ls("/", detail=True, tolerant=True)  # 标记损坏子项，而不是中断整个 listing
 ```
+
+普通详细 listing 对文件项使用严格模式：如果文件的持久化元数据或块图不一致，
+会抛出 `DataIntegrityError`。事故排查时可以使用 `tolerant=True`，这样健康
+条目仍会返回，损坏条目会以
+`{"name": "/bad.txt", "type": "corrupt", "error": "..."}` 形式暴露。
 
 ## 删除
 
@@ -43,7 +49,17 @@ fs.rm("/dir")                         # IsADirectoryError
 ```python
 fs.cp_file("/src.txt", "/dst.txt")    # 复制（不做块复用）
 fs.mv("/src.txt", "/dst.txt")         # 移动（更新路径）
+fs.mv("/src", "/archive", recursive=True)  # 目录移动（重写元数据）
 ```
+
+`copy_file()` 默认会在写入新目标前校验源文件完整性，因此不会把损坏源文件复制
+成看起来健康的新文件。
+
+递归 `fs.copy()` 是逐文件复制流程，不是时间点快照。如果复制过程中源文件被覆盖，
+结果就是每次文件操作当时看到的版本。不要把递归 copy 单独当作备份级快照。
+
+递归目录 `fs.mv()` 在一个数据库事务中执行原子元数据移动。它重写路径，保留块
+记录不变，而不是先复制文件再删除源目录。
 
 ## WebDAV 管理接口
 
@@ -109,6 +125,17 @@ from django_fsspec.operations import read_file
 data = read_file(1, "/test.txt", verify_checksum=True)
 ```
 
+也可以显式指定完整性策略：
+
+```python
+read_file(1, "/test.txt", integrity="off")       # 兼容模式
+read_file(1, "/test.txt", integrity="metadata")  # 结构和元数据校验
+read_file(1, "/test.txt", integrity="checksum")  # metadata 加 SHA-256 校验
+```
+
+完整性问题会抛出 `DataIntegrityError`。它继承自 `ValueError`，以兼容旧的
+checksum 错误处理代码。
+
 ## 事务
 
 使用 `fs.transaction` 将多个操作批量原子化：
@@ -157,6 +184,11 @@ with fs.transaction:
 ## 线程安全
 
 每次 `fs.open()` 返回独立的 `DjangoFile` 实例，可安全在多线程中使用。
+`DjangoFileSystem` 上的 transaction 状态是线程局部的，因此一个线程中的
+`fs.transaction` 不会捕获另一个线程用同一个 filesystem 实例发起的普通写入。
+
+打开的读句柄会在 open 时记录文件 id 和 version。如果后续 range read 之前文件被
+其他写入者覆盖，该句柄会抛出 `FileConflictError`，不会返回两个版本混合出的字节。
 
 ## 数据库路由
 

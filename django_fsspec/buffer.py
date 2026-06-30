@@ -17,10 +17,14 @@ class DjangoFile(AbstractBufferedFile):
 
         # For read mode, get file size
         size = None
+        self._file_id = None
+        self._file_version = None
         if "r" in mode:
             try:
                 info = operations.get_file_info(fs.namespace, path)
                 size = info["size"]
+                self._file_id = info.get("id")
+                self._file_version = info.get("version")
             except FileNotFoundError:
                 raise FileNotFoundError(f"File not found: {path}")
 
@@ -40,7 +44,14 @@ class DjangoFile(AbstractBufferedFile):
 
     def _fetch_range(self, start, end):
         """Read bytes [start, end) from the file."""
-        return operations.read_file_range(self.fs.namespace, self.path, start, end)
+        return operations.read_file_range(
+            self.fs.namespace,
+            self.path,
+            start,
+            end,
+            file_id=self._file_id,
+            version=self._file_version,
+        )
 
     def _initiate_upload(self):
         """Prepare for upload. Called once before _upload_chunk."""

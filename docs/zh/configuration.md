@@ -16,6 +16,20 @@
 - **影响**：超过上限的写入会抛出 `FileTooLargeError`
 - **与块大小的关系**：独立配置，互不影响
 
+## DJANGO_FSSPEC_READ_INTEGRITY
+
+- **默认值**：`"off"`
+- **可选值**：`"off"`、`"metadata"`、`"checksum"`
+- **说明**：`read_file()` 未显式指定策略时使用的默认读完整性策略
+- **影响**：
+  - `"off"` 保持兼容性，直接读取当前映射字节
+  - `"metadata"` 校验文件/块结构、大小、序号连续性和活动块标记
+  - `"checksum"` 在 metadata 校验之外，再校验块和文件的 SHA-256
+
+需要在数据库损坏时快速失败的任务，建议使用 `"metadata"` 或
+`"checksum"`。即使全局读策略为 `"off"`，`copy_file()` 默认也会使用
+checksum 完整性校验。
+
 ## 修改块大小后的处理
 
 修改 `DJANGO_FSSPEC_BLOCK_SIZE` 后：

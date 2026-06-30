@@ -28,7 +28,14 @@ Directories are also inferred from file paths for backward compatibility, so `/d
 ```python
 fs.ls("/", detail=False)  # ["/file.txt", "/subdir"]
 fs.ls("/", detail=True)   # [{"name": "/file.txt", "size": 100, "type": "file"}, ...]
+fs.ls("/", detail=True, tolerant=True)  # marks corrupt children instead of aborting
 ```
+
+Normal detailed listing is strict for file entries: if a file's persisted
+metadata or block graph is inconsistent, listing raises `DataIntegrityError`.
+Use `tolerant=True` during incident inventory to keep healthy entries visible
+and return corrupt entries as metadata such as
+`{"name": "/bad.txt", "type": "corrupt", "error": "..."}`.
 
 ## Deletion
 
@@ -43,7 +50,20 @@ fs.rm("/dir")                        # Raises IsADirectoryError
 ```python
 fs.cp_file("/src.txt", "/dst.txt")   # Copy (no block reuse)
 fs.mv("/src.txt", "/dst.txt")        # Move (updates path field)
+fs.mv("/src", "/archive", recursive=True)  # Directory move (metadata rewrite)
 ```
+
+`copy_file()` verifies source integrity by default before writing a new
+destination, so it will not turn a corrupted source into a healthy-looking copy.
+
+Recursive `fs.copy()` is a per-file copy workflow, not a point-in-time snapshot.
+If source files are overwritten while a recursive copy is running, the result is
+a best-effort copy of the versions seen by each file operation. Do not use
+recursive copy alone as a backup-quality snapshot.
+
+Recursive directory `fs.mv()` is implemented as an atomic metadata move inside
+one database transaction. It rewrites paths and leaves block rows untouched,
+rather than copying files and then deleting the source tree.
 
 ## WebDAV Management Interface
 
@@ -106,8 +126,19 @@ Supported methods: `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL
 from django_fsspec.operations import read_file
 
 data = read_file(1, "/test.txt", verify_checksum=True)
-# Raises ValueError on checksum mismatch
+# Raises DataIntegrityError on checksum or structural mismatch
 ```
+
+For explicit policy control:
+
+```python
+read_file(1, "/test.txt", integrity="off")       # compatibility mode
+read_file(1, "/test.txt", integrity="metadata")  # structure and metadata checks
+read_file(1, "/test.txt", integrity="checksum")  # metadata plus SHA-256 checks
+```
+
+`DataIntegrityError` is a `ValueError` subclass for backward compatibility with
+older checksum-handling code.
 
 ## Transactions
 
@@ -158,7 +189,13 @@ If you need consistent reads within a transaction, be aware that PostgreSQL may 
 
 ## Thread Safety
 
-Each `fs.open()` returns an independent `DjangoFile` instance. Safe for multi-threaded use.
+Each `fs.open()` returns an independent `DjangoFile` instance. Transaction state
+on `DjangoFileSystem` is thread-local, so one thread's `fs.transaction` does not
+capture normal writes from another thread using the same filesystem instance.
+
+Open read handles capture the file id and version at open time. If another
+writer overwrites the file before a later range read, the handle raises
+`FileConflictError` instead of returning mixed bytes from two versions.
 
 ## Database Routing
 

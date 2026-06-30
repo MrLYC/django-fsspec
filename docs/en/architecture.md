@@ -120,6 +120,10 @@ In Django autocommit mode it opens a database transaction; inside an existing
 transaction it creates a savepoint. On discard, it marks the atomic block for
 rollback. Nested fsspec transactions are rejected with `RuntimeError`.
 
+Transaction state is stored in thread-local state on the filesystem instance, so
+sharing a `DjangoFileSystem` object across threads does not make one thread's
+transaction capture another thread's normal writes.
+
 ## Block Size Changes
 
 Each `FileNode` stores the block size used when it was written, so files with
@@ -134,8 +138,8 @@ setting.
 | Command / Hook | Purpose |
 |----------------|---------|
 | `fsspec_stats` | Reports namespace count, file count/size, used/free blocks, and mapping count |
-| `fsspec_fsck` | Verifies block checksums, block sizes, file checksums, file sizes, sequence continuity, and mappings to free blocks |
-| `fsspec_repair` | Best-effort repair for derived metadata, live/free block flags, sequence gaps, impossible directory mappings, and unreferenced used blocks |
+| `fsspec_fsck` | Verifies block/file metadata, path-tree conflicts, invalid persisted paths and node types, directory block mappings, shared blocks, and mappings to free blocks; supports JSON findings with severity |
+| `fsspec_repair` | Best-effort repair for derived metadata, live/free block flags, sequence gaps, impossible directory mappings, unreferenced used blocks, and explicit path-conflict recovery |
 | `fsspec_gc` | Deletes free `StorageBlock` rows, optionally retaining recent free rows for inspection |
 | `check_block_size_consistency` | Emits a Django warning when stored block sizes differ from the configured block size |
 
