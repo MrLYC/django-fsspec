@@ -2,17 +2,39 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-01
+
 ### Added
-- Add `fsspec_rechunk` as the repeatable operational command for rewriting existing files to a target block size with dry-run, filters, checksum verification, and skip/abort error handling.
 - Add JSON output for `fsspec_repair` and `fsspec_rechunk`.
 - Add a release checklist and CI package checks for wheel contents and tag version consistency.
+- Add English and Chinese roadmap documents for future project evolution.
 - Add `uv.lock` and use uv for development, CI, benchmark, and release dependency management.
+
+### Changed
+- Define stable operational exit codes for `fsspec_fsck`, `fsspec_repair`, and `fsspec_rechunk`.
+- Constrain the supported Django dependency range to `>=4.2,<6.0`, matching the tested Django 4.2 and 5.2 matrix.
+
+### Fixed
+- Pin the `astral-sh/setup-uv` GitHub Action to `v8.2.0` so CI can resolve the action during job setup.
+
+## [0.2.2] - 2026-06-30
+
+### Added
+- Add `fsspec_repair` as a best-effort operational command for repairing missing directories, orphaned block links, file metadata drift, and checksum/version mismatches.
+- Add `fsspec_rechunk` as the repeatable operational command for rewriting existing files to a target block size with dry-run, filters, checksum verification, and skip/abort error handling.
+- Add adversarial data-integrity tests for dirty metadata, orphaned blocks, duplicate links, corrupted checksums, and broken directory state.
+- Add small, medium, and large benchmark scale coverage, including block-size matrix scenarios and large benchmark result analysis.
+- Add a data-integrity hardening spec covering requirements, design, and implementation tasks.
 
 ### Changed
 - Change the default block size from 256KB to 32KB and document 32KB as the conservative default for small files and broad database compatibility.
 - Rework block-size guidance so changing `DJANGO_FSSPEC_BLOCK_SIZE` does not imply a Django migration; old and new block sizes coexist by design.
-- Define stable operational exit codes for `fsspec_fsck`, `fsspec_repair`, and `fsspec_rechunk`.
-- Constrain the supported Django dependency range to `>=4.2,<6.0`, matching the tested Django 4.2 and 5.2 matrix.
+- Make normal read, list, delete, and maintenance flows more tolerant of dirty metadata so valid files can continue to work when unrelated rows are damaged.
+- Expand `fsspec_fsck` to report richer integrity issues and support repair-oriented workflows.
+
+### Fixed
+- Avoid Oracle `FOR UPDATE` with limited queries during delete flows.
+- Align E2E block-size expectations with the configured default block size.
 
 ### Removed
 - Remove the `RechunkOperation` migration API. Rechunking user data is now an explicit management command, not a package migration operation.
