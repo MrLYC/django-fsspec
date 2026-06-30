@@ -25,6 +25,18 @@ def test_ci_scale_preserves_existing_counts():
     assert ci["concurrent_ops"] == 200
 
 
+def test_small_scale_bridges_ci_and_medium_seeded_counts():
+    ci = bench.SCALES["ci"]
+    small = bench.SCALES["small"]
+    medium = bench.SCALES["medium"]
+
+    assert small["seeded_files"] == 1000
+    assert small["seeded_dirs"] == 50
+    assert small["seeded_repeats"] == 100
+    assert small["seeded_find_repeats"] == 5
+    assert ci["seeded_files"] < small["seeded_files"] < medium["seeded_files"]
+
+
 def test_build_seeded_paths_is_deterministic_and_seeded():
     paths = bench.build_seeded_paths(seed=1, file_count=20, dir_count=5)
 
@@ -36,10 +48,12 @@ def test_build_seeded_paths_is_deterministic_and_seeded():
 
 def test_select_scenarios_uses_seeded_scenarios_only_for_larger_default_scales():
     ci = bench.select_scenarios("ci")
+    small = bench.select_scenarios("small")
     medium = bench.select_scenarios("medium")
     large = bench.select_scenarios("large")
 
     assert set(bench.SEEDED_SCENARIOS).isdisjoint(ci)
+    assert set(bench.SEEDED_SCENARIOS).issubset(small)
     assert set(bench.SEEDED_SCENARIOS).issubset(medium)
     assert set(bench.SEEDED_SCENARIOS).issubset(large)
 

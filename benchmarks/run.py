@@ -12,7 +12,7 @@ Usage:
     python benchmarks/run.py --scenario write_small
 
     # Run scale-based seeded scenarios
-    python benchmarks/run.py --scale medium --scenario seeded_exists
+    python benchmarks/run.py --scale small --scenario seeded_exists
 """
 
 import argparse
@@ -59,6 +59,28 @@ SCALES = {
         "seeded_dirs": 10,
         "seeded_repeats": 25,
         "seeded_find_repeats": 1,
+    },
+    "small": {
+        "write_small_n": 1000,
+        "write_medium_n": 200,
+        "write_large_n": 50,
+        "read_small_n": 1000,
+        "read_large_n": 50,
+        "overwrite_n": 500,
+        "delete_n": 500,
+        "seek_read_n": 100,
+        "concurrent_threads": 8,
+        "concurrent_files": 100,
+        "concurrent_ops": 200,
+        "ls_flat_files": 1000,
+        "ls_flat_repeats": 100,
+        "ls_nested_dirs": 100,
+        "ls_nested_files_per_dir": 10,
+        "ls_nested_repeats": 100,
+        "seeded_files": 1_000,
+        "seeded_dirs": 50,
+        "seeded_repeats": 100,
+        "seeded_find_repeats": 5,
     },
     "medium": {
         "write_small_n": 1000,

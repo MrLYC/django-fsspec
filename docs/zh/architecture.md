@@ -168,7 +168,7 @@ Django system check `django_fsspec.W001` 会在已保存文件和当前配置不
 - **MySQL 8.0** 在 Django 5.2 下多数 CI 场景优于 Django 4.2，但大文件写入仍是最慢路径。
 - **PostgreSQL 16** 在 Django 4.2 和 5.2 下表现接近；在该 CI 环境中，大文件读取慢于 SQLite 和 MySQL。
 - **Oracle 23** 在本次 run 中拥有网络数据库里最快的大文件写入结果，读取延迟也较稳定。
-- 完整 CI 场景数据和手动触发的 medium/large 铺底结果见 [基准测试](benchmarks.md)。
+- 完整 CI 场景数据和手动触发的铺底结果见 [基准测试](benchmarks.md)。
 
 ## 开发环境
 

@@ -93,7 +93,7 @@ Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. The tab
 | **List** 1000 files | 4.3ms (234/s) | 7.1ms (141/s) | 6.8ms (147/s) | 7.0ms (144/s) | 6.5ms (153/s) | 7.6ms (132/s) |
 | **Delete** | 3.4ms (294/s) | 7.0ms (143/s) | 6.4ms (156/s) | 5.2ms (193/s) | 5.0ms (199/s) | 5.1ms (196/s) |
 
-Full benchmark results, including concurrency and manually triggered medium/large seeded runs, are documented in [Benchmarks](docs/en/benchmarks.md) and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
+Full benchmark results, including concurrency and manually triggered seeded runs, are documented in [Benchmarks](docs/en/benchmarks.md) and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
 
 ## Documentation
 

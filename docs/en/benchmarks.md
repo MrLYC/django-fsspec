@@ -65,10 +65,11 @@ After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fss
 | Scale | Purpose | Seeded files | Seeded directories | Seeded operation repeats | Seeded `find` repeats |
 |-------|---------|--------------|--------------------|--------------------------|-----------------------|
 | `ci` | Fast push/PR benchmark and smoke testing | 100 | 10 | 25 | 1 |
+| `small` | Manual bridge scale between CI and larger seeded runs | 1,000 | 50 | 100 | 5 |
 | `medium` | Manual moderate large-table benchmark | 10,000 | 100 | 250 | 5 |
 | `large` | Manual large-table benchmark | 50,000 | 500 | 500 | 3 |
 
-All scales keep the original fixed operation counts for write/read/delete/list/concurrent scenarios. Push/PR CI runs `--scale ci --seed 1` only.
+All scales keep the original fixed operation counts for write/read/delete/list/concurrent scenarios. Push/PR CI runs `--scale ci --seed 1` only. The `small` manual scale exists to avoid jumping directly from CI's 100 seeded files to medium's 10,000 seeded files.
 
 ## Performance expectations
 
@@ -89,7 +90,7 @@ CI scale is the best apples-to-apples comparison across all supported database b
 
 ### Seeded scale expectations
 
-Manual seeded runs show what changes when the metadata table already contains 10,000 or 50,000 files. Dataset creation is excluded from timing, so these numbers measure operations on an existing tree.
+The published manual seeded runs below show what changes when the metadata table already contains 10,000 or 50,000 files. Dataset creation is excluded from timing, so these numbers measure operations on an existing tree. New manual runs can also use `--scale small` for a 1,000-file bridge between CI and medium.
 
 | Operation | Medium scale, 10,000 files | Large scale, 50,000 files | Practical expectation |
 |-----------|----------------------------|---------------------------|-----------------------|
@@ -103,7 +104,7 @@ Backend fit in these results is straightforward: SQLite is appropriate for unit 
 
 Django version changes are measurable but not the main factor. In the latest CI run, MySQL 8.0 under Django 5.2 is about 6.1% lower latency on average than Django 4.2 across the measured table. PostgreSQL 16 under Django 5.2 is about 3.8% lower latency on average, with individual scenarios ranging from a small regression to a larger improvement.
 
-One interpretation detail matters for `medium` and `large`: the common read/write/delete/list/concurrency scenarios keep the same fixed operation counts as CI and reset the database before each scenario. The larger scale changes the seeded dataset size and seeded scenario repeat counts. That means the common read/write rows in the manual medium/large artifacts are useful for confirming normal operation behavior in the same workflow, while the seeded rows are the scale-sensitive large-table measurements.
+One interpretation detail matters for `small`, `medium`, and `large`: the common read/write/delete/list/concurrency scenarios keep the same fixed operation counts as CI and reset the database before each scenario. The larger scale changes the seeded dataset size and seeded scenario repeat counts. That means the common read/write rows in the manual seeded artifacts are useful for confirming normal operation behavior in the same workflow, while the seeded rows are the scale-sensitive large-table measurements.
 
 ## Detailed GitHub data
 
@@ -234,7 +235,7 @@ These scenarios run by default for `--scale ci`. Result `op` names are stable fo
 
 Seeded scenarios build a deterministic dataset under `/bench/seeded` before timing. Dataset creation is not included in operation timings. The `--seed` value controls path distribution so repeated runs are comparable while alternate seeds can vary directory placement.
 
-`--scale medium` and `--scale large` include these scenarios by default. They can also be selected explicitly with `--scenario` at any scale.
+`--scale small`, `--scale medium`, and `--scale large` include these scenarios by default. They can also be selected explicitly with `--scenario` at any scale.
 
 | Scenario | Design |
 |----------|--------|
@@ -253,12 +254,12 @@ Normal CI runs bounded benchmarks on every push and pull request, and uploads JS
 - `scale`
 - `seed`
 
-Large seeded runs use the manual GitHub Actions workflow **Large Benchmark**. Inputs:
+Manual seeded runs use the GitHub Actions workflow **Large Benchmark**. Inputs:
 
 | Input | Values |
 |-------|--------|
 | `database` | `sqlite`, `mysql`, `postgres`, `oracle` |
-| `scale` | `medium`, `large` |
+| `scale` | `small`, `medium`, `large` |
 | `seed` | Integer seed, default `1` |
 | `scenario` | `all` or any benchmark scenario name |
 

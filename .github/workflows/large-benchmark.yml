@@ -17,6 +17,7 @@ on:
         type: choice
         default: large
         options:
+          - small
           - medium
           - large
       seed:
