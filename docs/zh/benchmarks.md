@@ -70,18 +70,51 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 
 所有规模都会保留原有写入、读取、删除、列目录和并发场景的固定操作次数。Push/PR CI 只运行 `--scale ci --seed 1`。
 
-## 最新 GitHub 结果
+## 性能预期
 
-以下数据均来自 2026-06-29 的 GitHub Actions。CI 小规模和 medium 铺底结果来自 commit `eb31d73`。large 铺底结果来自 commit `205aee6`；从 `205aee6` 到 `eb31d73` 之间只修改了 benchmark 文档，没有修改 benchmark 代码、运行时代码、demo settings、测试或 workflow。
+下面的耗时范围来自 [GitHub 真实数据](#github-真实数据) 中列出的 GitHub Actions 结果。它们适合用来建立同一套 benchmark 场景下的方向性预期，不应直接当作生产容量上限。GitHub Actions runner 分配、数据库容器预热状态和宿主机负载都可能造成单次运行波动。
+
+### CI 规模操作范围
+
+CI 规模最适合横向比较所有支持的数据库后端，因为同一张表的数据来自同一次成功 CI run。MySQL 和 PostgreSQL 的范围同时包含 Django 4.2 与 Django 5.2 job。
+
+| 操作类型 | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 | 使用预期 |
+|----------|--------|-----------|---------------|-----------|----------|
+| 小/中文件写入 | 4.21-4.38ms | 7.23-8.07ms | 6.24-6.59ms | 6.29-6.54ms | 小文件写入通常应保持个位数毫秒；服务端数据库比 SQLite 多出数毫秒。 |
+| 大文件写入，1 MB | 8.44ms | 29.95-30.17ms | 29.93-33.39ms | 14.04ms | 大文件写入主要受 block 持久化影响；网络数据库上应预期低几十毫秒。 |
+| 读取与 seek | 1.44-1.87ms | 2.44-4.57ms | 2.54-9.48ms | 2.81-5.32ms | 读取通常是个位数毫秒；本次 CI 中 PostgreSQL 的大文件读取是网络数据库里最慢的读取路径。 |
+| 覆盖/删除 | 3.40-5.80ms | 6.41-11.56ms | 5.03-9.50ms | 5.11-9.32ms | 修改已有路径通常处在个位数到低两位数毫秒。 |
+| 目录列举 | 4.03-4.28ms | 5.87-7.09ms | 6.54-7.17ms | 5.44-7.58ms | 有界的平铺目录和浅层嵌套目录列举，在各服务端数据库上表现接近。 |
+| 8 线程并发 | 只读 2.14ms；写密集锁冲突 | 2.84-7.83ms | 2.37-6.74ms | 3.16-7.19ms | 并发写入应使用服务端数据库。SQLite 适合本地或读多写少场景，但写密集并发会遇到 `database is locked`。 |
+
+### 铺底规模预期
+
+手动铺底 run 展示了元数据表已有 10,000 或 50,000 个文件时的行为。铺底数据创建时间不计入测量耗时，因此这些数字衡量的是已存在目录树上的操作成本。
+
+| 操作 | Medium，10,000 文件 | Large，50,000 文件 | 使用预期 |
+|------|---------------------|--------------------|----------|
+| 直接 `info` | 0.33-0.72ms | 0.38-0.74ms | 直接元数据查询基本保持稳定，因为可以很好利用索引。 |
+| `exists` | 0.85-2.07ms | 1.04-6.54ms | 存在性检查仍然便宜，但存在/缺失混合和不同后端的查询计划在更大数据量下会开始体现差异。 |
+| 深层目录 `ls` | 4.01-7.90ms | 4.99-18.61ms | 列一个有内容的深层目录会随规模温和增长。 |
+| 根目录 `ls` | 13.14-26.86ms | 51.53-124.37ms | 根目录列举会受根路径下索引路径总量影响，不应作为大目录树的高频热路径。 |
+| 递归 `find` | 100.83-144.07ms | 494.83-753.99ms | 全树扫描接近随文件数线性增长；请求路径里应避免频繁完整 `find`。 |
+
+这些结果里的后端适配判断比较明确：SQLite 适合单元测试、本地开发和低并发部署；存在并发写入时应使用 MySQL、PostgreSQL 或 Oracle。PostgreSQL 在本组数据中对并发和递归 `find` 最均衡。Oracle 在大文件写入、large 根目录列举和 large `exists` 上表现较好。MySQL 仍然可用，但本组数据里大文件写入和递归 `find` 相对更慢。
+
+Django 版本会带来可见差异，但不是主导因素。在最新 CI run 中，MySQL 8.0 使用 Django 5.2 时，整张测量表平均延迟比 Django 4.2 低约 6.1%。PostgreSQL 16 使用 Django 5.2 时平均延迟低约 3.8%，但单个场景既有轻微退化，也有更明显改善。
+
+## GitHub 真实数据
+
+CI 规模数据来自 2026-06-30 的成功 GitHub Actions CI run [`28412676243`](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243)，commit 为 `2236341`。Medium 和 large 铺底数据来自 2026-06-29 手动触发的 Large Benchmark run。这些铺底 run 是目前最新可用的大表参考 artifact；应按规模和场景比较，不应视为与最新 CI 小规模表来自同一个 commit。
 
 | Artifact | Run | Commit | 范围 |
 |----------|-----|--------|------|
-| `benchmark-sqlite` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，SQLite |
-| `benchmark-mysql-8.0-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，MySQL 8.0 + Django 4.2 |
-| `benchmark-mysql-8.0-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，MySQL 8.0 + Django 5.2 |
-| `benchmark-postgres-16-django-4.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，PostgreSQL 16 + Django 4.2 |
-| `benchmark-postgres-16-django-5.2` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，PostgreSQL 16 + Django 5.2 |
-| `benchmark-oracle` | [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) | `eb31d73` | CI 规模，Oracle 23 |
+| `benchmark-sqlite` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，SQLite |
+| `benchmark-mysql-8.0-django-4.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，MySQL 8.0 + Django 4.2 |
+| `benchmark-mysql-8.0-django-5.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，MySQL 8.0 + Django 5.2 |
+| `benchmark-postgres-16-django-4.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，PostgreSQL 16 + Django 4.2 |
+| `benchmark-postgres-16-django-5.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，PostgreSQL 16 + Django 5.2 |
+| `benchmark-oracle` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI 规模，Oracle 23 |
 | `large-benchmark-sqlite-medium-seed-1` | [28381604379](https://github.com/MrLYC/django-fsspec/actions/runs/28381604379) | `eb31d73` | Medium 规模，SQLite |
 | `large-benchmark-mysql-medium-seed-1` | [28381612421](https://github.com/MrLYC/django-fsspec/actions/runs/28381612421) | `eb31d73` | Medium 规模，MySQL 8.0 |
 | `large-benchmark-postgres-medium-seed-1` | [28381595934](https://github.com/MrLYC/django-fsspec/actions/runs/28381595934) | `eb31d73` | Medium 规模，PostgreSQL 16 |
@@ -91,25 +124,25 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `large-benchmark-postgres-large-seed-1` | [28373362314](https://github.com/MrLYC/django-fsspec/actions/runs/28373362314) | `205aee6` | Large 规模，PostgreSQL 16 |
 | `large-benchmark-oracle-large-seed-1` | [28373585625](https://github.com/MrLYC/django-fsspec/actions/runs/28373585625) | `205aee6` | Large 规模，Oracle 23 |
 
-格式：平均延迟 / 吞吐量。SQLite 的 `concurrent_write` 和 `concurrent_mixed` 返回 `database is locked`；这是 SQLite 串行化写入模型下的合理结果，因此作为 benchmark 结果如实记录。
+格式：平均延迟 / 吞吐量。成功的并发结果会在 `op` 名称中带上配置的 `8t` 线程数后缀。SQLite 的 `concurrent_write` 和 `concurrent_mixed` 返回 `database is locked`；这是 SQLite 串行化写入模型下的合理结果，因此作为 benchmark 结果如实记录。
 
 ### CI 规模结果
 
 | 场景 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
 |------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
-| `write_small` | 4.23ms / 236 ops/s | 8.04ms / 124 ops/s | 7.13ms / 140 ops/s | 6.05ms / 165 ops/s | 5.98ms / 167 ops/s | 6.53ms / 153 ops/s |
-| `write_medium` | 4.47ms / 223 ops/s | 8.39ms / 119 ops/s | 7.51ms / 133 ops/s | 6.08ms / 164 ops/s | 5.97ms / 168 ops/s | 6.91ms / 145 ops/s |
-| `write_large` | 8.21ms / 122 ops/s | 31.28ms / 32 ops/s | 29.34ms / 34 ops/s | 27.14ms / 37 ops/s | 27.13ms / 37 ops/s | 15.94ms / 63 ops/s |
-| `read_small` | 1.42ms / 705 ops/s | 2.58ms / 387 ops/s | 2.40ms / 416 ops/s | 2.50ms / 400 ops/s | 2.45ms / 408 ops/s | 2.68ms / 373 ops/s |
-| `read_large` | 1.82ms / 549 ops/s | 4.48ms / 223 ops/s | 4.12ms / 243 ops/s | 8.18ms / 122 ops/s | 8.23ms / 121 ops/s | 5.73ms / 174 ops/s |
-| `overwrite` | 4.86ms / 206 ops/s | 10.18ms / 98 ops/s | 9.15ms / 109 ops/s | 7.47ms / 134 ops/s | 7.50ms / 133 ops/s | 8.06ms / 124 ops/s |
-| `ls_flat_1000` | 4.21ms / 237 ops/s | 7.02ms / 142 ops/s | 6.78ms / 148 ops/s | 6.35ms / 157 ops/s | 6.30ms / 159 ops/s | 8.21ms / 122 ops/s |
-| `ls_nested_100dirs` | 3.95ms / 253 ops/s | 6.10ms / 164 ops/s | 5.84ms / 171 ops/s | 6.28ms / 159 ops/s | 6.21ms / 161 ops/s | 5.60ms / 179 ops/s |
-| `delete` | 2.67ms / 375 ops/s | 5.77ms / 173 ops/s | 5.18ms / 193 ops/s | 3.81ms / 263 ops/s | 3.67ms / 273 ops/s | 3.98ms / 251 ops/s |
-| `seek_read` | 1.56ms / 642 ops/s | 3.34ms / 299 ops/s | 3.05ms / 328 ops/s | 4.83ms / 207 ops/s | 4.63ms / 216 ops/s | 3.85ms / 260 ops/s |
-| `concurrent_write` | ERROR: database is locked | 6.03ms / 166 ops/s | 5.47ms / 183 ops/s | 4.86ms / 206 ops/s | 4.80ms / 208 ops/s | 5.77ms / 173 ops/s |
-| `concurrent_read` | 2.08ms / 481 ops/s | 3.11ms / 322 ops/s | 2.88ms / 348 ops/s | 2.32ms / 432 ops/s | 2.35ms / 426 ops/s | 3.17ms / 316 ops/s |
-| `concurrent_mixed` | ERROR: database is locked | 3.94ms / 254 ops/s | 3.65ms / 274 ops/s | 3.48ms / 288 ops/s | 3.34ms / 299 ops/s | 4.09ms / 244 ops/s |
+| `write_small` | 4.21ms / 237 ops/s | 7.74ms / 129 ops/s | 7.23ms / 138 ops/s | 6.59ms / 152 ops/s | 6.36ms / 157 ops/s | 6.29ms / 159 ops/s |
+| `write_medium` | 4.38ms / 228 ops/s | 8.07ms / 124 ops/s | 7.70ms / 130 ops/s | 6.55ms / 153 ops/s | 6.24ms / 160 ops/s | 6.54ms / 153 ops/s |
+| `write_large` | 8.44ms / 118 ops/s | 30.17ms / 33 ops/s | 29.95ms / 33 ops/s | 33.39ms / 30 ops/s | 29.93ms / 33 ops/s | 14.04ms / 71 ops/s |
+| `read_small` | 1.44ms / 693 ops/s | 2.62ms / 381 ops/s | 2.44ms / 409 ops/s | 2.96ms / 338 ops/s | 2.54ms / 393 ops/s | 2.81ms / 355 ops/s |
+| `read_large` | 1.87ms / 536 ops/s | 4.57ms / 219 ops/s | 4.26ms / 235 ops/s | 9.45ms / 106 ops/s | 9.48ms / 105 ops/s | 5.32ms / 188 ops/s |
+| `overwrite` | 5.80ms / 172 ops/s | 11.56ms / 86 ops/s | 10.75ms / 93 ops/s | 9.50ms / 105 ops/s | 9.05ms / 110 ops/s | 9.32ms / 107 ops/s |
+| `ls_flat_1000` | 4.28ms / 234 ops/s | 7.09ms / 141 ops/s | 6.79ms / 147 ops/s | 6.95ms / 144 ops/s | 6.54ms / 153 ops/s | 7.58ms / 132 ops/s |
+| `ls_nested_100dirs` | 4.03ms / 248 ops/s | 6.15ms / 163 ops/s | 5.87ms / 170 ops/s | 7.17ms / 139 ops/s | 6.64ms / 151 ops/s | 5.44ms / 184 ops/s |
+| `delete` | 3.40ms / 294 ops/s | 7.01ms / 143 ops/s | 6.41ms / 156 ops/s | 5.19ms / 193 ops/s | 5.03ms / 199 ops/s | 5.11ms / 196 ops/s |
+| `seek_read` | 1.59ms / 627 ops/s | 3.35ms / 299 ops/s | 3.14ms / 319 ops/s | 5.34ms / 187 ops/s | 6.25ms / 160 ops/s | 3.59ms / 279 ops/s |
+| `concurrent_write_8t` | ERROR: database is locked | 7.83ms / 128 ops/s | 7.62ms / 131 ops/s | 6.56ms / 152 ops/s | 6.74ms / 148 ops/s | 7.19ms / 139 ops/s |
+| `concurrent_read_8t` | 2.14ms / 467 ops/s | 3.19ms / 313 ops/s | 2.84ms / 353 ops/s | 2.73ms / 366 ops/s | 2.37ms / 423 ops/s | 3.16ms / 316 ops/s |
+| `concurrent_mixed_8t` | ERROR: database is locked | 5.11ms / 196 ops/s | 4.62ms / 216 ops/s | 4.30ms / 233 ops/s | 4.21ms / 237 ops/s | 4.58ms / 218 ops/s |
 
 ### Medium 铺底结果
 
@@ -135,20 +168,9 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `seeded_info` | 0.38ms / 2626 ops/s | 0.73ms / 1370 ops/s | 0.65ms / 1542 ops/s | 0.74ms / 1356 ops/s |
 | `seeded_find` | 644.41ms / 2 ops/s | 736.55ms / 1 ops/s | 494.83ms / 2 ops/s | 753.99ms / 1 ops/s |
 
-### 客观分析
-
-这些数字更适合作为同一套 benchmark 代码下不同后端的方向性对比，不应直接视为生产容量上限。GitHub Actions runner、数据库容器启动状态和宿主机负载都会带来运行间波动。CI 表最适合同组横向比较，因为所有行来自同一次 CI run。手动 medium 和 large 铺底 run 可以按规模与场景比较，但 Large Benchmark workflow 不运行 Django 版本矩阵。
-
-- **CI 规模单操作延迟**：SQLite 在单线程写入、读取、列目录、删除和 seek 场景下延迟最低，因为它不经过网络数据库服务。在网络数据库中，PostgreSQL 的 Django 5.2 行拥有最低的小文件和中文件写入延迟，Oracle 拥有最低的大文件写入延迟，MySQL 在本次 run 中的大文件写入延迟最高。
-- **读取行为**：SQLite 在 `read_small`、`read_large` 和 `seek_read` 中最快。在网络数据库中，MySQL 的 `read_large` 最快，Oracle 居中，PostgreSQL 在该 CI 环境中的大文件读取最慢。
-- **Django 版本影响**：MySQL 8.0 在 Django 5.2 下相对 Django 4.2 的所有 CI 场景都有改善，整表平均延迟约降低 8%。PostgreSQL 16 在 Django 4.2 和 5.2 下基本持平，Django 5.2 的平均延迟约降低 1.4%，单个场景从轻微退化到小幅改善都有出现。
-- **并发表现**：SQLite 在写密集并发场景返回 `database is locked`，这符合 SQLite 串行化写入模型。在网络数据库中，PostgreSQL 的并发写和混合读写延迟最低，MySQL 接近但略慢，Oracle 的并发写接近，但本次 run 中混合读写较慢。
-- **铺底规模变化**：从 medium 到 large，铺底数据从 10,000 文件和 100 目录增长到 50,000 文件和 500 目录。`seeded_find` 接近随文件数线性增长，延迟增加约 4.9x 到 5.4x。`seeded_ls_root` 增加约 3.9x 到 4.6x，说明根目录列举成本明显受总索引路径规模影响。`seeded_info` 基本保持稳定，只变化约 0.9x 到 1.2x，说明直接元数据查询在数据集增长后仍然能较好利用索引。
-- **后端适配判断**：SQLite 适合本地开发、测试和低并发部署。生产环境如果存在并发写，应使用服务端数据库。在这些结果中，PostgreSQL 对并发和递归 `find` 负载最均衡；Oracle 在 large 铺底的根目录列举和 `exists` 上表现较好；MySQL 仍可用，但大文件写入和递归 `find` 相对更慢。
-
 ## 默认 CI 场景
 
-`--scale ci` 默认运行这些场景，并保持稳定的操作名，便于 CI artifacts 对比：
+`--scale ci` 默认运行这些场景。同一规模下结果里的 `op` 名称保持稳定，部分名称会带上配置规模或线程数，例如 `ls_flat_1000` 和 `concurrent_write_8t`：
 
 | 场景 | 设计 |
 |------|------|

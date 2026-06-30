@@ -81,17 +81,17 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## Performance
 
-Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. The table below uses CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170) on commit `eb31d73` with `--scale ci --seed 1`. Format: average latency (throughput).
+Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. The table below uses CI run [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) on commit `2236341` with `--scale ci --seed 1`. Format: average latency (throughput).
 
 | Operation | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
 |-----------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
-| **Write** small (100B) | 4.2ms (236/s) | 8.0ms (124/s) | 7.1ms (140/s) | 6.0ms (165/s) | 6.0ms (167/s) | 6.5ms (153/s) |
-| **Write** medium (10KB) | 4.5ms (223/s) | 8.4ms (119/s) | 7.5ms (133/s) | 6.1ms (164/s) | 6.0ms (168/s) | 6.9ms (145/s) |
-| **Write** large (1MB) | 8.2ms (122/s) | 31.3ms (32/s) | 29.3ms (34/s) | 27.1ms (37/s) | 27.1ms (37/s) | 15.9ms (63/s) |
-| **Read** small (100B) | 1.4ms (705/s) | 2.6ms (387/s) | 2.4ms (416/s) | 2.5ms (400/s) | 2.5ms (408/s) | 2.7ms (373/s) |
-| **Read** large (1MB) | 1.8ms (549/s) | 4.5ms (223/s) | 4.1ms (243/s) | 8.2ms (122/s) | 8.2ms (121/s) | 5.7ms (174/s) |
-| **List** 1000 files | 4.2ms (237/s) | 7.0ms (142/s) | 6.8ms (148/s) | 6.4ms (157/s) | 6.3ms (159/s) | 8.2ms (122/s) |
-| **Delete** | 2.7ms (375/s) | 5.8ms (173/s) | 5.2ms (193/s) | 3.8ms (263/s) | 3.7ms (273/s) | 4.0ms (251/s) |
+| **Write** small (100B) | 4.2ms (237/s) | 7.7ms (129/s) | 7.2ms (138/s) | 6.6ms (152/s) | 6.4ms (157/s) | 6.3ms (159/s) |
+| **Write** medium (10KB) | 4.4ms (228/s) | 8.1ms (124/s) | 7.7ms (130/s) | 6.6ms (153/s) | 6.2ms (160/s) | 6.5ms (153/s) |
+| **Write** large (1MB) | 8.4ms (118/s) | 30.2ms (33/s) | 30.0ms (33/s) | 33.4ms (30/s) | 29.9ms (33/s) | 14.0ms (71/s) |
+| **Read** small (100B) | 1.4ms (693/s) | 2.6ms (381/s) | 2.4ms (409/s) | 3.0ms (338/s) | 2.5ms (393/s) | 2.8ms (355/s) |
+| **Read** large (1MB) | 1.9ms (536/s) | 4.6ms (219/s) | 4.3ms (235/s) | 9.5ms (106/s) | 9.5ms (105/s) | 5.3ms (188/s) |
+| **List** 1000 files | 4.3ms (234/s) | 7.1ms (141/s) | 6.8ms (147/s) | 7.0ms (144/s) | 6.5ms (153/s) | 7.6ms (132/s) |
+| **Delete** | 3.4ms (294/s) | 7.0ms (143/s) | 6.4ms (156/s) | 5.2ms (193/s) | 5.0ms (199/s) | 5.1ms (196/s) |
 
 Full benchmark results, including concurrency and manually triggered medium/large seeded runs, are documented in [Benchmarks](docs/en/benchmarks.md) and available as [GitHub Actions artifacts](https://github.com/MrLYC/django-fsspec/actions).
 
