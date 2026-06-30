@@ -91,7 +91,7 @@ class TestFileBlock(TestCase):
 
 class TestSettings(TestCase):
     def test_default_block_size(self):
-        assert get_block_size() == 256 * 1024
+        assert get_block_size() == 32 * 1024
 
     def test_default_max_file_size(self):
         assert get_max_file_size() == 2 * 1024 * 1024

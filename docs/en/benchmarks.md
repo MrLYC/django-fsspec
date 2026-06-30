@@ -12,7 +12,7 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
 # Run one scenario with a specific block size
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 65536
+DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
 
 # Save JSON output
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
@@ -76,7 +76,7 @@ All scales keep the original fixed operation counts for write/read/delete/list/c
 
 ## Block-size comparisons
 
-Some database backends expose Django `BinaryField` through text/CLOB-like storage. For those implementations, 256KB rows can be slower than smaller chunks because encoding, memory copies, redo/undo logs, and out-of-row LOB handling become more visible. Use the same database and scale with multiple block sizes before choosing a production default:
+Some database backends expose Django `BinaryField` through text/CLOB-like storage. For those implementations, 256KB rows can be slower than smaller chunks because encoding, memory copies, redo/undo logs, and out-of-row LOB handling become more visible. `django-fsspec` defaults to 32KB as a conservative small-file and broad-database baseline. Use the same database and scale with multiple block sizes before overriding it in production:
 
 ```bash
 for bs in 32768 65536 131072 262144; do
@@ -90,7 +90,7 @@ for bs in 32768 65536 131072 262144; do
 done
 ```
 
-For broad coverage, run at least `write_large`, `read_large`, `seek_read`, `overwrite`, `concurrent_write`, and one seeded scenario such as `seeded_find`. The manual GitHub Actions workflow can also run a block-size matrix by setting `block_size_kb` to `all`.
+For broad coverage, run at least `write_large`, `read_large`, `seek_read`, `overwrite`, `concurrent_write`, and one seeded scenario such as `seeded_find`. The manual GitHub Actions workflow defaults to `block_size_kb=32` and can also run a full block-size matrix by setting `block_size_kb` to `all`.
 
 ## Performance expectations
 
@@ -284,6 +284,6 @@ Manual seeded runs use the GitHub Actions workflow **Large Benchmark**. Inputs:
 | `scale` | `small`, `medium`, `large` |
 | `seed` | Integer seed, default `1` |
 | `scenario` | `all` or any benchmark scenario name |
-| `block_size_kb` | `32`, `64`, `128`, `256`, or `all` |
+| `block_size_kb` | `32` (default), `64`, `128`, `256`, or `all` |
 
 The manual workflow runs one database at a time and uploads JSON artifacts named with database, scale, seed, and block size.

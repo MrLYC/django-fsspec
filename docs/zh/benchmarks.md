@@ -12,7 +12,7 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
 # 使用指定 block size 运行一个场景
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 65536
+DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
 
 # 保存 JSON 输出
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
@@ -76,7 +76,7 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 
 ## Block Size 对比
 
-部分数据库会把 Django `BinaryField` 落到 text/CLOB 类存储。对这些实现来说，256KB 单行数据可能比更小的块更慢，因为编码、内存拷贝、redo/undo 日志和 out-of-row LOB 处理都会更明显。生产前建议在同一个数据库和同一个规模下对比多个 block size：
+部分数据库会把 Django `BinaryField` 落到 text/CLOB 类存储。对这些实现来说，256KB 单行数据可能比更小的块更慢，因为编码、内存拷贝、redo/undo 日志和 out-of-row LOB 处理都会更明显。`django-fsspec` 默认使用 32KB，作为小文件和广泛数据库兼容性的保守基线。生产中覆盖默认值前，建议在同一个数据库和同一个规模下对比多个 block size：
 
 ```bash
 for bs in 32768 65536 131072 262144; do
@@ -90,7 +90,7 @@ for bs in 32768 65536 131072 262144; do
 done
 ```
 
-建议至少覆盖 `write_large`、`read_large`、`seek_read`、`overwrite`、`concurrent_write`，以及一个铺底场景，例如 `seeded_find`。手动 GitHub Actions workflow 也可以把 `block_size_kb` 设置为 `all`，一次跑完整 block-size 矩阵。
+建议至少覆盖 `write_large`、`read_large`、`seek_read`、`overwrite`、`concurrent_write`，以及一个铺底场景，例如 `seeded_find`。手动 GitHub Actions workflow 默认 `block_size_kb=32`，也可以设置为 `all` 一次跑完整 block-size 矩阵。
 
 ## 性能预期
 
@@ -284,6 +284,6 @@ CI 规模数据来自 2026-06-30 的成功 GitHub Actions CI run [`28412676243`]
 | `scale` | `small`、`medium`、`large` |
 | `seed` | 整数 seed，默认 `1` |
 | `scenario` | `all` 或任意 benchmark 场景名 |
-| `block_size_kb` | `32`、`64`、`128`、`256` 或 `all` |
+| `block_size_kb` | `32`（默认）、`64`、`128`、`256` 或 `all` |
 
 手动 workflow 每次只运行一个数据库，并上传按数据库、规模、seed 和 block size 命名的 JSON artifacts。

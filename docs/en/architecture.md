@@ -17,8 +17,7 @@ binary blocks, and file-to-block mappings.
 | `models.py` | ORM schema and storage settings helpers |
 | `validators.py` | Path validation and Unicode NFC normalization |
 | `checks.py` | Django system/startup checks for block-size drift |
-| `migrations_ops.py` | `RechunkOperation` for rewriting existing files to a new block size |
-| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, `fsspec_repair`, and `fsspec_gc` |
+| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, `fsspec_repair`, `fsspec_rechunk`, and `fsspec_gc` |
 
 ## Three-Table Model
 
@@ -77,8 +76,8 @@ next-child projection in the database.
 4. Inside `transaction.atomic()`, an existing file releases its old blocks to the
    free pool and updates `FileNode` with an optimistic `version` predicate; a new
    file creates a fresh `FileNode`.
-5. `_allocate_blocks()` claims free `StorageBlock` rows when possible, rewrites
-   their data/checksum, and creates new blocks for any shortfall.
+5. `_allocate_blocks()` creates fresh `StorageBlock` rows. Free rows are kept
+   for inspection or later removal by `fsspec_gc`.
 6. `FileBlock.bulk_create()` stores the ordered file-to-block mapping.
 
 Exclusive create mode (`"xb"`) routes through `create_file_exclusive()` and
@@ -127,11 +126,11 @@ transaction capture another thread's normal writes.
 ## Block Size Changes
 
 Each `FileNode` stores the block size used when it was written, so files with
-different block sizes can coexist and range reads still work. Changing
-`DJANGO_FSSPEC_BLOCK_SIZE` only affects new writes. To rewrite existing files,
-add a migration with `RechunkOperation(new_block_size=...)`; the Django system
-check `django_fsspec.W001` warns when persisted files differ from the current
-setting.
+different block sizes can coexist and range reads still work. The default is
+32KB. Changing `DJANGO_FSSPEC_BLOCK_SIZE` only affects new writes and does not
+require a migration for correctness. To rewrite existing files, run
+`fsspec_rechunk`; the Django system check `django_fsspec.W001` warns when
+persisted files differ from the current setting.
 
 ## Operational Tooling
 
@@ -140,12 +139,13 @@ setting.
 | `fsspec_stats` | Reports namespace count, file count/size, used/free blocks, and mapping count |
 | `fsspec_fsck` | Verifies block/file metadata, path-tree conflicts, invalid persisted paths and node types, directory block mappings, shared blocks, and mappings to free blocks; supports JSON findings with severity |
 | `fsspec_repair` | Best-effort repair for derived metadata, live/free block flags, sequence gaps, impossible directory mappings, unreferenced used blocks, and explicit path-conflict recovery |
+| `fsspec_rechunk` | Rewrites healthy files to a target block size with dry-run, filters, per-file transactions, and skip/abort error handling |
 | `fsspec_gc` | Deletes free `StorageBlock` rows, optionally retaining recent free rows for inspection |
 | `check_block_size_consistency` | Emits a Django warning when stored block sizes differ from the configured block size |
 
 ## Performance Baseline
 
-Benchmarked on GitHub Actions (ubuntu-latest) with default 256KB block size. Format: average latency / throughput. Source: CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170), commit `eb31d73`, `--scale ci --seed 1`.
+Benchmarked on GitHub Actions (ubuntu-latest) with the historical 256KB block size. Format: average latency / throughput. Source: CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170), commit `eb31d73`, `--scale ci --seed 1`.
 
 ### Write Operations
 

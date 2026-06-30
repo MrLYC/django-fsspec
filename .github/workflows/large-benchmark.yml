@@ -29,7 +29,7 @@ on:
       block_size_kb:
         description: Block size in KiB, or all
         type: choice
-        default: "256"
+        default: "32"
         options:
           - all
           - "32"

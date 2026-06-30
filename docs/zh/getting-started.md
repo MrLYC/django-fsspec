@@ -28,8 +28,8 @@ python manage.py migrate
 在 Django `settings.py` 中：
 
 ```python
-# 块大小（字节），默认 256KB
-DJANGO_FSSPEC_BLOCK_SIZE = 64 * 1024
+# 块大小（字节），默认 32KB
+DJANGO_FSSPEC_BLOCK_SIZE = 32 * 1024
 
 # 文件大小上限（字节），默认 2MB
 DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024

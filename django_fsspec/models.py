@@ -2,7 +2,7 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.db import models
 
-DEFAULT_BLOCK_SIZE = 256 * 1024  # 256KB
+DEFAULT_BLOCK_SIZE = 32 * 1024  # 32KB
 
 NODE_TYPE_FILE = "file"
 NODE_TYPE_DIRECTORY = "directory"

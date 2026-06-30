@@ -84,7 +84,7 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 ("size", models.BigIntegerField(default=0)),
-                ("block_size", models.IntegerField(default=262144)),
+                ("block_size", models.IntegerField(default=32768)),
                 ("checksum", models.CharField(blank=True, default="", max_length=64)),
                 ("content_type", models.CharField(blank=True, default="", max_length=256)),
                 ("version", models.IntegerField(default=1)),

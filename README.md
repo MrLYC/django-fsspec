@@ -14,7 +14,7 @@ A Django app that provides a file system interface via [fsspec](https://filesyst
 - **Namespace partitioning** — separate path spaces via integer namespace; authorization remains the host app's responsibility
 - **Path validation** — blacklist rules + Unicode NFC normalization
 - **Implicit directories** — no directory records, derived from file paths
-- **Management commands** — `fsspec_gc`, `fsspec_fsck`, `fsspec_repair`, `fsspec_stats`
+- **Management commands** — `fsspec_gc`, `fsspec_fsck`, `fsspec_repair`, `fsspec_rechunk`, `fsspec_stats`
 
 ## Quick Start
 
@@ -63,8 +63,8 @@ fs.rm("/hello.txt")
 Add to your Django `settings.py`:
 
 ```python
-# Block size in bytes (default: 256KB)
-DJANGO_FSSPEC_BLOCK_SIZE = 64 * 1024
+# Block size in bytes (default: 32KB)
+DJANGO_FSSPEC_BLOCK_SIZE = 32 * 1024
 
 # Maximum file size in bytes (default: 2MB)
 DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
@@ -81,7 +81,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## Performance
 
-Benchmarked on GitHub Actions (ubuntu-latest), default 256KB block size. The table below uses CI run [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) on commit `2236341` with `--scale ci --seed 1`. Format: average latency (throughput).
+Benchmarked on GitHub Actions (ubuntu-latest), using the historical 256KB block size. The table below uses CI run [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) on commit `2236341` with `--scale ci --seed 1`. Format: average latency (throughput).
 
 | Operation | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
 |-----------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
@@ -103,7 +103,7 @@ Full benchmark results, including concurrency and manually triggered seeded runs
 - [Architecture](docs/en/architecture.md)
 - [Management Commands](docs/en/management-commands.md)
 - [Benchmarks](docs/en/benchmarks.md)
-- [Block Size Migration](docs/en/migration-guide.md)
+- [Block Size Operations](docs/en/block-size.md)
 - [Exceptions](docs/en/exceptions.md)
 
 [中文文档](README_zh.md) | [Chinese Documentation](README_zh.md)

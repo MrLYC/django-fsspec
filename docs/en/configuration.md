@@ -4,10 +4,10 @@ All settings are read from Django's `settings.py` via `getattr` with defaults.
 
 ## DJANGO_FSSPEC_BLOCK_SIZE
 
-- **Default**: `262144` (256KB)
+- **Default**: `32768` (32KB)
 - **Description**: Block size for file chunking
 - **Impact**: Only affects newly written files. Each `FileNode` records the `block_size` used at write time, so files with different block sizes coexist
-- **Recommendation**: For small-file workloads, try `64 * 1024` (64KB)
+- **Recommendation**: Keep the 32KB default for small-file-heavy workloads and databases where large binary fields may behave like text/CLOB fields. For large-file throughput on databases with efficient binary storage, benchmark `64 * 1024`, `128 * 1024`, and `256 * 1024` before overriding.
 
 ## DJANGO_FSSPEC_MAX_FILE_SIZE
 
@@ -39,4 +39,4 @@ After changing `DJANGO_FSSPEC_BLOCK_SIZE`:
 2. **New files use the new setting**
 3. **Both coexist** — reads use the file's stored `block_size` for block arithmetic
 
-To unify all files to the new block size, use `RechunkOperation`. See [Migration Guide](migration-guide.md).
+No migration is required for correctness. To unify existing files to one block size, use `fsspec_rechunk`. See [Block Size Operations](block-size.md).

@@ -9,7 +9,13 @@ from django_fsspec.exceptions import (
     NamespaceNotFoundError,
     PathValidationError,
 )
-from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
+from django_fsspec.models import (
+    FileBlock,
+    FileNode,
+    Namespace,
+    StorageBlock,
+    get_block_size,
+)
 from django_fsspec.operations import (
     append_file,
     copy_file,
@@ -53,7 +59,7 @@ class TestWriteFile(TestCase):
         assert node.version == 2
 
     def test_write_multi_block(self):
-        block_size = 256 * 1024
+        block_size = get_block_size()
         data = b"x" * (block_size + 100)
         node = write_file(1, "/big.bin", data)
         assert node.size == len(data)

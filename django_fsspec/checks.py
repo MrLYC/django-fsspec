@@ -12,9 +12,8 @@ def check_block_size_consistency(app_configs, **kwargs):
     """Django system check: warn if files exist with a different block_size
     than the current DJANGO_FSSPEC_BLOCK_SIZE setting.
 
-    This means the setting was changed without running a RechunkOperation
-    migration. Files still work (each stores its own block_size), but the
-    inconsistency may be unintentional.
+    This means the setting was changed while existing files keep their stored
+    block_size. Files still work, but the inconsistency may be unintentional.
 
     Silence with: SILENCED_SYSTEM_CHECKS = ["django_fsspec.W001"]
     """
@@ -38,12 +37,13 @@ def check_block_size_consistency(app_configs, **kwargs):
                 Warning(
                     f"Found {count} file(s) with block_size ({sizes_str}) "
                     f"different from current setting ({current_block_size}). "
-                    f"Run a RechunkOperation migration to unify, or silence "
+                    f"Run fsspec_rechunk to unify, or silence "
                     f"this check if intentional.",
                     hint=(
-                        "Create a migration with RechunkOperation("
-                        f"new_block_size={current_block_size}) to re-chunk "
-                        "existing files, or add 'django_fsspec.W001' to "
+                        "Run 'python manage.py fsspec_rechunk "
+                        f"--block-size {current_block_size} --dry-run' to "
+                        "preview re-chunking existing files, or add "
+                        "'django_fsspec.W001' to "
                         "SILENCED_SYSTEM_CHECKS."
                     ),
                     id=BLOCK_SIZE_MISMATCH_ID,
@@ -72,7 +72,7 @@ def check_block_size_on_startup():
             )
             logger.warning(
                 "django-fsspec: %d file(s) have block_size %s, but current "
-                "setting is %d. Consider running RechunkOperation or updating "
+                "setting is %d. Consider running fsspec_rechunk or updating "
                 "DJANGO_FSSPEC_BLOCK_SIZE.",
                 count,
                 sizes,

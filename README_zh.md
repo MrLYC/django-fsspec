@@ -14,7 +14,7 @@
 - **命名空间分区** — 整数命名空间提供独立路径空间；授权仍由宿主应用负责
 - **路径校验** — 黑名单规则 + Unicode NFC 归一化
 - **隐式目录** — 无目录记录，从文件路径推导
-- **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_repair`、`fsspec_stats`
+- **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_repair`、`fsspec_rechunk`、`fsspec_stats`
 
 ## 快速开始
 
@@ -63,8 +63,8 @@ fs.rm("/hello.txt")
 在 Django `settings.py` 中添加：
 
 ```python
-# 块大小（字节），默认 256KB
-DJANGO_FSSPEC_BLOCK_SIZE = 64 * 1024
+# 块大小（字节），默认 32KB
+DJANGO_FSSPEC_BLOCK_SIZE = 32 * 1024
 
 # 文件大小上限（字节），默认 2MB
 DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
@@ -81,7 +81,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 
 ## 性能
 
-在 GitHub Actions (ubuntu-latest) 上测试，默认 256KB 块大小。下表来自 commit `eb31d73` 上的 CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170)，参数为 `--scale ci --seed 1`。格式：平均延迟（吞吐量）。
+在 GitHub Actions (ubuntu-latest) 上测试，使用历史 256KB 块大小。下表来自 commit `eb31d73` 上的 CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170)，参数为 `--scale ci --seed 1`。格式：平均延迟（吞吐量）。
 
 | 操作 | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
 |------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
@@ -103,7 +103,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 - [架构设计](docs/zh/architecture.md)
 - [管理命令](docs/zh/management-commands.md)
 - [基准测试](docs/zh/benchmarks.md)
-- [块大小迁移](docs/zh/migration-guide.md)
+- [块大小运维](docs/zh/block-size.md)
 - [异常体系](docs/zh/exceptions.md)
 
 [English](README.md) | [英文文档](README.md)

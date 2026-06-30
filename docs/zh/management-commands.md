@@ -140,6 +140,24 @@ invalid_paths: 0
 Applied 6 repair actions. Run fsspec_fsck to verify.
 ```
 
+## fsspec_rechunk — 块大小重写
+
+把已有文件重写到目标块大小。这是可重复执行的运维命令，不是 Django migration。
+
+```bash
+python manage.py fsspec_rechunk --block-size 32768 --dry-run
+python manage.py fsspec_rechunk --block-size 32768 --namespace 1 --prefix /uploads/ --limit 1000
+python manage.py fsspec_rechunk --block-size 32768 --verify checksum
+```
+
+重要行为：
+
+- 只重写 `FileNode.block_size` 与 `--block-size` 不一致的文件。
+- 每个文件独立事务处理。
+- 已有文件不 rechunk 也能继续正常读取；只有想统一历史数据时才运行。
+- 损坏文件和并发版本冲突默认跳过。使用 `--on-error abort` 可在第一个问题处停止。
+- 旧块只标记为空闲，不直接删除。验证后再运行 `fsspec_gc` 清理。
+
 ## fsspec_stats — 统计信息
 
 ```bash

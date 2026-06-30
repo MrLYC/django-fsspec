@@ -1,44 +1,6 @@
 from django_test_migrations.contrib.unittest_case import MigratorTestCase
 
 
-class TestCompatibilityMigration0002(MigratorTestCase):
-    """Test that 0002 is a no-op compatibility migration."""
-
-    migrate_from = ("django_fsspec", "0001_initial")
-    migrate_to = ("django_fsspec", "0002_rechunk_test")
-
-    def prepare(self):
-        FileNode = self.old_state.apps.get_model("django_fsspec", "FileNode")
-        StorageBlock = self.old_state.apps.get_model("django_fsspec", "StorageBlock")
-        FileBlock = self.old_state.apps.get_model("django_fsspec", "FileBlock")
-
-        node = FileNode.objects.create(
-            namespace_id=1,
-            path="/compat.txt",
-            size=5,
-            block_size=256 * 1024,
-            checksum="abc",
-            version=1,
-        )
-        block = StorageBlock.objects.create(
-            data=b"hello",
-            size=5,
-            checksum="abc",
-            is_free=False,
-        )
-        FileBlock.objects.create(file=node, block=block, sequence=0)
-
-    def test_0002_does_not_rechunk_existing_files(self):
-        FileNode = self.new_state.apps.get_model("django_fsspec", "FileNode")
-        FileBlock = self.new_state.apps.get_model("django_fsspec", "FileBlock")
-        StorageBlock = self.new_state.apps.get_model("django_fsspec", "StorageBlock")
-
-        node = FileNode.objects.get(path="/compat.txt")
-        assert node.block_size == 256 * 1024
-        assert FileBlock.objects.filter(file=node).count() == 1
-        assert StorageBlock.objects.filter(is_free=True).count() == 0
-
-
 class TestInitialMigration(MigratorTestCase):
     """Test that the initial migration creates all tables with correct schema."""
 
@@ -63,6 +25,11 @@ class TestInitialMigration(MigratorTestCase):
         FileNode = self.new_state.apps.get_model("django_fsspec", "FileNode")
         path_field = FileNode._meta.get_field("path")
         assert path_field.max_length == 700
+
+    def test_filenode_block_size_default(self):
+        FileNode = self.new_state.apps.get_model("django_fsspec", "FileNode")
+        block_size_field = FileNode._meta.get_field("block_size")
+        assert block_size_field.default == 32 * 1024
 
     def test_filenode_unique_together(self):
         FileNode = self.new_state.apps.get_model("django_fsspec", "FileNode")

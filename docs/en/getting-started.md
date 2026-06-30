@@ -28,8 +28,8 @@ python manage.py migrate
 In your Django `settings.py`:
 
 ```python
-# Block size in bytes (default: 256KB)
-DJANGO_FSSPEC_BLOCK_SIZE = 64 * 1024
+# Block size in bytes (default: 32KB)
+DJANGO_FSSPEC_BLOCK_SIZE = 32 * 1024
 
 # Max file size in bytes (default: 2MB)
 DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024

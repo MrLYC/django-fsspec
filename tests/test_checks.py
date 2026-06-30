@@ -27,7 +27,7 @@ class TestBlockSizeCheck(TestCase):
             errors = check_block_size_consistency(None)
         assert len(errors) == 1
         assert errors[0].id == BLOCK_SIZE_MISMATCH_ID
-        assert "RechunkOperation" in errors[0].hint
+        assert "fsspec_rechunk" in errors[0].hint
 
     def test_warning_includes_count(self):
         write_file(1, "/check/a.txt", b"a")
@@ -40,7 +40,7 @@ class TestBlockSizeCheck(TestCase):
         write_file(1, "/check/a.txt", b"data")
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=99999):
             errors = check_block_size_consistency(None)
-        assert "262144" in errors[0].msg  # default block size
+        assert "32768" in errors[0].msg  # default block size
 
     def test_multiple_block_sizes(self):
         write_file(1, "/check/a.txt", b"a")
@@ -52,7 +52,7 @@ class TestBlockSizeCheck(TestCase):
         assert len(errors) == 1
         msg = errors[0].msg
         assert "100" in msg
-        assert "262144" in msg
+        assert "32768" in msg
 
     def test_no_warning_after_rechunk(self):
         """If all files have the same block_size as the setting, no warning."""
@@ -70,7 +70,7 @@ class TestStartupWarning(TestCase):
             with self.assertLogs("django_fsspec", level="WARNING") as cm:
                 check_block_size_on_startup()
         assert any("block_size" in msg for msg in cm.output)
-        assert any("RechunkOperation" in msg for msg in cm.output)
+        assert any("fsspec_rechunk" in msg for msg in cm.output)
 
     def test_startup_silent_when_consistent(self):
         write_file(1, "/startup/a.txt", b"data")

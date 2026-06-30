@@ -139,6 +139,25 @@ invalid_paths: 0
 Applied 6 repair actions. Run fsspec_fsck to verify.
 ```
 
+## fsspec_rechunk — Block Size Rewrite
+
+Rewrite existing files to a target block size. This is an operational command,
+not a Django migration; it can be run repeatedly and in batches.
+
+```bash
+python manage.py fsspec_rechunk --block-size 32768 --dry-run
+python manage.py fsspec_rechunk --block-size 32768 --namespace 1 --prefix /uploads/ --limit 1000
+python manage.py fsspec_rechunk --block-size 32768 --verify checksum
+```
+
+Important behavior:
+
+- Only files whose stored `FileNode.block_size` differs from `--block-size` are rewritten.
+- Each file is processed in its own transaction.
+- Existing files continue to work without rechunking; run this command only when you want to standardize old data.
+- Damaged files and concurrent version conflicts are skipped by default. Use `--on-error abort` to stop on the first problem.
+- Old blocks are marked free, not deleted. Run `fsspec_gc` after verification.
+
 ## fsspec_stats — Statistics
 
 Display filesystem statistics:

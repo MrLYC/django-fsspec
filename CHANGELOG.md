@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Add `fsspec_rechunk` as the repeatable operational command for rewriting existing files to a target block size with dry-run, filters, checksum verification, and skip/abort error handling.
+
+### Changed
+- Change the default block size from 256KB to 32KB and document 32KB as the conservative default for small files and broad database compatibility.
+- Rework block-size guidance so changing `DJANGO_FSSPEC_BLOCK_SIZE` does not imply a Django migration; old and new block sizes coexist by design.
+
+### Removed
+- Remove the `RechunkOperation` migration API. Rechunking user data is now an explicit management command, not a package migration operation.
+
 ## [0.2.1] - 2026-06-29
 
 ### Added

@@ -1,10 +1,11 @@
 from io import StringIO
 import hashlib
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth.models import Group
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from django_fsspec.models import (
     NODE_TYPE_DIRECTORY,
@@ -12,7 +13,9 @@ from django_fsspec.models import (
     FileNode,
     Namespace,
     StorageBlock,
+    get_block_size,
 )
+from django_fsspec.management.commands import fsspec_rechunk as rechunk_command
 from django_fsspec.operations import delete_file, read_file, write_file
 
 
@@ -63,6 +66,175 @@ class TestFsspecGc(TestCase):
         out = StringIO()
         call_command("fsspec_gc", "--keep=10", stdout=out)
         assert "Nothing to clean" in out.getvalue()
+
+
+class TestFsspecRechunk(TestCase):
+    def test_rechunk_basic(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            data = b"A" * 350
+            write_file(1, "/rechunk/basic.bin", data)
+
+        node = FileNode.objects.get(path="/rechunk/basic.bin")
+        assert node.block_size == 100
+        assert FileBlock.objects.filter(file=node).count() == 4
+        old_block_count = StorageBlock.objects.filter(is_free=False).count()
+
+        out = StringIO()
+        call_command("fsspec_rechunk", "--block-size=500", stdout=out)
+
+        node.refresh_from_db()
+        assert node.block_size == 500
+        assert node.version == 2
+        assert FileBlock.objects.filter(file=node).count() == 1
+        assert StorageBlock.objects.filter(is_free=True).count() == old_block_count
+        assert read_file(1, "/rechunk/basic.bin", verify_checksum=True) == data
+        assert "Rechunked 1 file(s)" in out.getvalue()
+
+    def test_rechunk_dry_run_does_not_modify_rows(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/dry-run.bin", b"B" * 350)
+
+        node = FileNode.objects.get(path="/rechunk/dry-run.bin")
+        active_before = StorageBlock.objects.filter(is_free=False).count()
+
+        out = StringIO()
+        call_command(
+            "fsspec_rechunk",
+            "--block-size=500",
+            "--dry-run",
+            stdout=out,
+        )
+
+        node.refresh_from_db()
+        assert node.block_size == 100
+        assert FileBlock.objects.filter(file=node).count() == 4
+        assert StorageBlock.objects.filter(is_free=True).count() == 0
+        assert StorageBlock.objects.filter(is_free=False).count() == active_before
+        assert "Would rechunk 1 file(s)" in out.getvalue()
+
+    def test_rechunk_filters_namespace_prefix_source_and_limit(self):
+        Namespace.objects.create(id=2, name="tenant-2")
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/scope/a.bin", b"a" * 150)
+            write_file(1, "/scope/b.bin", b"b" * 150)
+            write_file(1, "/other/c.bin", b"c" * 150)
+            write_file(2, "/scope/d.bin", b"d" * 150)
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=200):
+            write_file(1, "/scope/source-mismatch.bin", b"e" * 150)
+
+        call_command(
+            "fsspec_rechunk",
+            "--block-size=500",
+            "--namespace=1",
+            "--prefix=/scope",
+            "--source-block-size=100",
+            "--limit=1",
+            stdout=StringIO(),
+        )
+
+        assert FileNode.objects.get(namespace_id=1, path="/scope/a.bin").block_size == 500
+        assert FileNode.objects.get(namespace_id=1, path="/scope/b.bin").block_size == 100
+        assert FileNode.objects.get(namespace_id=1, path="/other/c.bin").block_size == 100
+        assert FileNode.objects.get(namespace_id=2, path="/scope/d.bin").block_size == 100
+        assert (
+            FileNode.objects.get(
+                namespace_id=1,
+                path="/scope/source-mismatch.bin",
+            ).block_size
+            == 200
+        )
+
+    def test_rechunk_empty_file(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/empty.txt", b"")
+
+        call_command("fsspec_rechunk", "--block-size=500", stdout=StringIO())
+
+        node = FileNode.objects.get(path="/rechunk/empty.txt")
+        assert node.block_size == 500
+        assert FileBlock.objects.filter(file=node).count() == 0
+        assert read_file(1, "/rechunk/empty.txt", verify_checksum=True) == b""
+
+    def test_rechunk_skips_structural_damage_by_default(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/damaged.bin", b"x" * 101)
+
+        node = FileNode.objects.get(path="/rechunk/damaged.bin")
+        damaged = FileBlock.objects.filter(file=node).order_by("sequence").last()
+        damaged.sequence = 5
+        damaged.save(update_fields=["sequence"])
+
+        out = StringIO()
+        call_command("fsspec_rechunk", "--block-size=50", stdout=out)
+
+        node.refresh_from_db()
+        assert node.block_size == 100
+        assert "errors: 1" in out.getvalue()
+        assert "Skipped FileNode" in out.getvalue()
+
+    def test_rechunk_checksum_verify_skips_checksum_damage(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/checksum.bin", b"checksum")
+
+        node = FileNode.objects.get(path="/rechunk/checksum.bin")
+        block = FileBlock.objects.get(file=node).block
+        block.checksum = "bad"
+        block.save(update_fields=["checksum"])
+
+        out = StringIO()
+        call_command(
+            "fsspec_rechunk",
+            "--block-size=50",
+            "--verify=checksum",
+            stdout=out,
+        )
+
+        node.refresh_from_db()
+        assert node.block_size == 100
+        assert "errors: 1" in out.getvalue()
+
+    def test_rechunk_abort_raises_on_damage(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/abort.bin", b"x" * 101)
+
+        node = FileNode.objects.get(path="/rechunk/abort.bin")
+        damaged = FileBlock.objects.filter(file=node).order_by("sequence").last()
+        damaged.sequence = 5
+        damaged.save(update_fields=["sequence"])
+
+        with pytest.raises(CommandError):
+            call_command(
+                "fsspec_rechunk",
+                "--block-size=50",
+                "--on-error=abort",
+                stdout=StringIO(),
+            )
+
+    def test_rechunk_skips_version_conflict(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/conflict.bin", b"conflict")
+
+        original_load = rechunk_command._load_file_data
+
+        def mutate_version(file_node, *args, **kwargs):
+            data = original_load(file_node, *args, **kwargs)
+            FileNode.objects.filter(pk=file_node.pk).update(
+                version=file_node.version + 1
+            )
+            return data
+
+        out = StringIO()
+        with patch.object(rechunk_command, "_load_file_data", mutate_version):
+            call_command("fsspec_rechunk", "--block-size=50", stdout=out)
+
+        node = FileNode.objects.get(path="/rechunk/conflict.bin")
+        assert node.block_size == 100
+        assert node.version == 1
+        assert "errors: 1" in out.getvalue()
+
+    def test_rechunk_rejects_invalid_block_size(self):
+        with pytest.raises(CommandError):
+            call_command("fsspec_rechunk", "--block-size=0", stdout=StringIO())
 
 
 class TestFsspecFsck(TestCase):
@@ -215,7 +387,7 @@ class TestFsspecRepair(TestCase):
         assert "No errors found" in verify.getvalue()
 
     def test_repair_free_block_reference_and_sequence_gap(self):
-        data = b"a" * (256 * 1024) + b"b"
+        data = b"a" * get_block_size() + b"b"
         write_file(1, "/sequence.bin", data)
         node = FileNode.objects.get(path="/sequence.bin")
         file_blocks = list(FileBlock.objects.filter(file=node).order_by("sequence"))
@@ -302,8 +474,9 @@ class TestFsspecRepair(TestCase):
 
     def test_repair_mixed_adversarial_damage(self):
         Namespace.objects.create(id=2, name="tenant-2")
+        large_data = b"a" * get_block_size() + b"b"
         write_file(1, "/meta.txt", b"metadata")
-        write_file(1, "/large.bin", b"a" * (256 * 1024) + b"b")
+        write_file(1, "/large.bin", large_data)
         write_file(1, "/lost.txt", b"lost")
         write_file(2, "/tenant.txt", b"tenant")
 
@@ -359,9 +532,7 @@ class TestFsspecRepair(TestCase):
         call_command("fsspec_repair", stdout=out)
 
         assert read_file(1, "/meta.txt", verify_checksum=True) == b"metadata"
-        assert read_file(1, "/large.bin", verify_checksum=True) == (
-            b"a" * (256 * 1024) + b"b"
-        )
+        assert read_file(1, "/large.bin", verify_checksum=True) == large_data
         assert read_file(1, "/lost.txt", verify_checksum=True) == b""
         assert read_file(2, "/tenant.txt", verify_checksum=True) == b"tenant"
         assert StorageBlock.objects.get(id=lost_block_id).is_free
