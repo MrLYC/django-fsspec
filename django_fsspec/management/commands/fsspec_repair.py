@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -12,6 +13,9 @@ from django_fsspec.models import (
     StorageBlock,
 )
 from django_fsspec.validators import validate_path
+
+
+EXIT_ATTENTION = 1
 
 
 class Command(BaseCommand):
@@ -40,11 +44,17 @@ class Command(BaseCommand):
             default="move-descendants",
             help="Recovery policy for file paths that also have descendants",
         )
+        parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Emit machine-readable repair summary",
+        )
 
     def handle(self, *args, **options):
         namespace = options["namespace"]
         dry_run = options["dry_run"]
         recover_path_conflicts = options["recover_path_conflicts"]
+        json_output = options["json"]
 
         summary = {
             "block_metadata": 0,
@@ -60,10 +70,11 @@ class Command(BaseCommand):
             "invalid_paths": 0,
         }
 
-        if dry_run:
-            self.stdout.write("Previewing filesystem repairs...")
-        else:
-            self.stdout.write("Repairing filesystem metadata...")
+        if not json_output:
+            if dry_run:
+                self.stdout.write("Previewing filesystem repairs...")
+            else:
+                self.stdout.write("Repairing filesystem metadata...")
 
         with transaction.atomic():
             self._repair_free_referenced_blocks(namespace, dry_run, summary)
@@ -83,10 +94,6 @@ class Command(BaseCommand):
                 summary["shared_blocks"] or summary["invalid_paths"]
             )
 
-        self.stdout.write("")
-        for label, count in summary.items():
-            self.stdout.write(f"{label}: {count}")
-
         action_keys = {
             "block_metadata",
             "free_referenced_blocks",
@@ -99,6 +106,52 @@ class Command(BaseCommand):
         }
         action_total = sum(summary[label] for label in action_keys)
         total = sum(summary.values())
+
+        if json_output:
+            self._write_json(summary, dry_run, unresolved)
+        else:
+            self._write_human_summary(
+                summary,
+                dry_run=dry_run,
+                unresolved=unresolved,
+                action_total=action_total,
+                total=total,
+            )
+
+        if unresolved:
+            raise CommandError(
+                "Unresolved structural damage remains; run fsspec_repair "
+                "--dry-run and choose explicit recovery options",
+                returncode=EXIT_ATTENTION,
+            )
+
+    def _write_json(self, summary, dry_run, unresolved):
+        self.stdout.write(
+            json.dumps(
+                {
+                    "ok": not unresolved,
+                    "dry_run": dry_run,
+                    "summary": summary,
+                    "unresolved": unresolved,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    def _write_human_summary(
+        self,
+        summary,
+        *,
+        dry_run,
+        unresolved,
+        action_total,
+        total,
+    ):
+        self.stdout.write("")
+        for label, count in summary.items():
+            self.stdout.write(f"{label}: {count}")
+
         if dry_run:
             self.stdout.write(
                 self.style.WARNING(
@@ -119,18 +172,8 @@ class Command(BaseCommand):
                     f"\nApplied {action_total} repair actions. Run fsspec_fsck to verify."
                 )
             )
-            if unresolved:
-                raise CommandError(
-                    "Unresolved structural damage remains; run fsspec_repair "
-                    "--dry-run and choose explicit recovery options"
-                )
         else:
             self.stdout.write(self.style.SUCCESS("\nNo repair actions needed."))
-            if unresolved:
-                raise CommandError(
-                    "Unresolved structural damage remains; run fsspec_repair "
-                    "--dry-run and choose explicit recovery options"
-                )
 
     def _file_nodes(self, namespace):
         nodes = FileNode.objects.all()

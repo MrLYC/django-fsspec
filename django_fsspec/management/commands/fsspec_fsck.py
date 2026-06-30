@@ -14,6 +14,9 @@ from django_fsspec.models import (
 from django_fsspec.validators import validate_path
 
 
+EXIT_ATTENTION = 1
+
+
 class Command(BaseCommand):
     help = "Check filesystem integrity (block checksums and file consistency)"
 
@@ -84,7 +87,10 @@ class Command(BaseCommand):
             )
 
         if findings:
-            raise CommandError("Filesystem integrity check failed")
+            raise CommandError(
+                "Filesystem integrity check failed",
+                returncode=EXIT_ATTENTION,
+            )
 
     def _check_blocks(self, namespace, add):
         if namespace is None:

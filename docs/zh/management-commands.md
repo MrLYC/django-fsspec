@@ -15,6 +15,31 @@ python manage.py fsspec_namespace delete media
 
 默认命名空间由迁移创建，`id=1`，`name=default`，该命令不允许删除默认命名空间。
 
+## 运维退出码
+
+`fsck`、`repair` 和 `rechunk` 使用稳定退出码，方便脚本调用：
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | 命令完成，且没有需要运维关注的 finding |
+| `1` | 命令完成，但 `fsck` 发现损坏、`rechunk` 跳过文件，或 `repair` 仍有未解决损坏 |
+| `2` | 参数错误或命令无法继续执行，例如 `rechunk --on-error abort` |
+
+`fsspec_repair` 成功应用安全修复且没有 unresolved damage 时，退出码仍为 `0`。
+
+建议的完整事故处理流程：
+
+```bash
+python manage.py fsspec_fsck
+python manage.py fsspec_repair --dry-run
+python manage.py fsspec_repair
+python manage.py fsspec_rechunk --block-size 32768 --dry-run
+python manage.py fsspec_rechunk --block-size 32768
+python manage.py fsspec_fsck
+python manage.py fsspec_gc --dry-run
+python manage.py fsspec_gc
+```
+
 ## fsspec_gc — 清理空闲块
 
 ```bash
@@ -88,6 +113,7 @@ python manage.py fsspec_repair --dry-run
 python manage.py fsspec_repair
 python manage.py fsspec_repair --namespace 1
 python manage.py fsspec_repair --recover-path-conflicts
+python manage.py fsspec_repair --dry-run --json
 ```
 
 建议的事故处理流程：
@@ -140,6 +166,10 @@ invalid_paths: 0
 Applied 6 repair actions. Run fsspec_fsck to verify.
 ```
 
+JSON 输出形如 `{"ok": true, "dry_run": false, "summary": {...}, "unresolved": false}`。
+安全修复会体现在 `summary` 中；如果仍有未解决结构损坏，`unresolved` 为 `true`，
+命令以退出码 `1` 结束。
+
 ## fsspec_rechunk — 块大小重写
 
 把已有文件重写到目标块大小。这是可重复执行的运维命令，不是 Django migration。
@@ -148,6 +178,7 @@ Applied 6 repair actions. Run fsspec_fsck to verify.
 python manage.py fsspec_rechunk --block-size 32768 --dry-run
 python manage.py fsspec_rechunk --block-size 32768 --namespace 1 --prefix /uploads/ --limit 1000
 python manage.py fsspec_rechunk --block-size 32768 --verify checksum
+python manage.py fsspec_rechunk --block-size 32768 --json
 ```
 
 重要行为：
@@ -157,6 +188,9 @@ python manage.py fsspec_rechunk --block-size 32768 --verify checksum
 - 已有文件不 rechunk 也能继续正常读取；只有想统一历史数据时才运行。
 - 损坏文件和并发版本冲突默认跳过。使用 `--on-error abort` 可在第一个问题处停止。
 - 旧块只标记为空闲，不直接删除。验证后再运行 `fsspec_gc` 清理。
+
+JSON 输出形如 `{"ok": true, "dry_run": false, "summary": {...}, "skipped": []}`。
+如果存在跳过文件，`ok` 为 `false`，每个跳过文件都会包含原因，命令以退出码 `1` 结束。
 
 ## fsspec_stats — 统计信息
 

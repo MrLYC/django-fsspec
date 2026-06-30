@@ -17,6 +17,31 @@ python manage.py fsspec_namespace delete media
 
 The default namespace is created by migrations as `id=1`, `name=default`, and cannot be deleted by this command.
 
+## Operational Exit Codes
+
+`fsck`, `repair`, and `rechunk` use stable exit codes for scripts:
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Command completed without findings that require operator attention |
+| `1` | Command completed, but `fsck` found damage, `rechunk` skipped files, or `repair` still has unresolved damage |
+| `2` | Invalid arguments or an unrecoverable command failure, such as `rechunk --on-error abort` |
+
+`fsspec_repair` exits `0` after applying safe repairs when no unresolved damage remains.
+
+Recommended incident flow:
+
+```bash
+python manage.py fsspec_fsck
+python manage.py fsspec_repair --dry-run
+python manage.py fsspec_repair
+python manage.py fsspec_rechunk --block-size 32768 --dry-run
+python manage.py fsspec_rechunk --block-size 32768
+python manage.py fsspec_fsck
+python manage.py fsspec_gc --dry-run
+python manage.py fsspec_gc
+```
+
 ## fsspec_gc — Garbage Collection
 
 Clean up free storage blocks:
@@ -84,6 +109,7 @@ python manage.py fsspec_repair --dry-run
 python manage.py fsspec_repair
 python manage.py fsspec_repair --namespace 1
 python manage.py fsspec_repair --recover-path-conflicts
+python manage.py fsspec_repair --dry-run --json
 ```
 
 Recommended incident flow:
@@ -139,6 +165,10 @@ invalid_paths: 0
 Applied 6 repair actions. Run fsspec_fsck to verify.
 ```
 
+JSON output returns `{"ok": true, "dry_run": false, "summary": {...}, "unresolved": false}`.
+Safe repairs are reflected in `summary`; unresolved structural damage sets
+`unresolved` to `true` and exits with code `1`.
+
 ## fsspec_rechunk — Block Size Rewrite
 
 Rewrite existing files to a target block size. This is an operational command,
@@ -148,6 +178,7 @@ not a Django migration; it can be run repeatedly and in batches.
 python manage.py fsspec_rechunk --block-size 32768 --dry-run
 python manage.py fsspec_rechunk --block-size 32768 --namespace 1 --prefix /uploads/ --limit 1000
 python manage.py fsspec_rechunk --block-size 32768 --verify checksum
+python manage.py fsspec_rechunk --block-size 32768 --json
 ```
 
 Important behavior:
@@ -157,6 +188,10 @@ Important behavior:
 - Existing files continue to work without rechunking; run this command only when you want to standardize old data.
 - Damaged files and concurrent version conflicts are skipped by default. Use `--on-error abort` to stop on the first problem.
 - Old blocks are marked free, not deleted. Run `fsspec_gc` after verification.
+
+JSON output returns `{"ok": true, "dry_run": false, "summary": {...}, "skipped": []}`.
+When files are skipped, `ok` is `false`, each skipped file is listed with a
+reason, and the command exits with code `1`.
 
 ## fsspec_stats — Statistics
 

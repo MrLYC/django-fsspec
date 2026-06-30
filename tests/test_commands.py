@@ -1,5 +1,6 @@
 from io import StringIO
 import hashlib
+import json
 from unittest.mock import patch
 
 import pytest
@@ -90,6 +91,20 @@ class TestFsspecRechunk(TestCase):
         assert read_file(1, "/rechunk/basic.bin", verify_checksum=True) == data
         assert "Rechunked 1 file(s)" in out.getvalue()
 
+    def test_rechunk_json_success(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/json.bin", b"A" * 350)
+
+        out = StringIO()
+        call_command("fsspec_rechunk", "--block-size=500", "--json", stdout=out)
+
+        payload = json.loads(out.getvalue())
+        assert payload["ok"] is True
+        assert payload["dry_run"] is False
+        assert payload["skipped"] == []
+        assert payload["summary"]["files_rechunked"] == 1
+        assert payload["summary"]["files_skipped"] == 0
+
     def test_rechunk_dry_run_does_not_modify_rows(self):
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
             write_file(1, "/rechunk/dry-run.bin", b"B" * 350)
@@ -111,6 +126,27 @@ class TestFsspecRechunk(TestCase):
         assert StorageBlock.objects.filter(is_free=True).count() == 0
         assert StorageBlock.objects.filter(is_free=False).count() == active_before
         assert "Would rechunk 1 file(s)" in out.getvalue()
+
+    def test_rechunk_json_dry_run_does_not_modify_rows(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/json-dry-run.bin", b"B" * 350)
+
+        node = FileNode.objects.get(path="/rechunk/json-dry-run.bin")
+        out = StringIO()
+        call_command(
+            "fsspec_rechunk",
+            "--block-size=500",
+            "--dry-run",
+            "--json",
+            stdout=out,
+        )
+
+        payload = json.loads(out.getvalue())
+        node.refresh_from_db()
+        assert payload["ok"] is True
+        assert payload["dry_run"] is True
+        assert payload["summary"]["files_rechunked"] == 1
+        assert node.block_size == 100
 
     def test_rechunk_filters_namespace_prefix_source_and_limit(self):
         Namespace.objects.create(id=2, name="tenant-2")
@@ -165,12 +201,40 @@ class TestFsspecRechunk(TestCase):
         damaged.save(update_fields=["sequence"])
 
         out = StringIO()
-        call_command("fsspec_rechunk", "--block-size=50", stdout=out)
+        with pytest.raises(CommandError) as exc_info:
+            call_command("fsspec_rechunk", "--block-size=50", stdout=out)
 
         node.refresh_from_db()
+        assert exc_info.value.returncode == 1
         assert node.block_size == 100
         assert "errors: 1" in out.getvalue()
         assert "Skipped FileNode" in out.getvalue()
+
+    def test_rechunk_json_reports_skipped_damage(self):
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
+            write_file(1, "/rechunk/json-damaged.bin", b"x" * 101)
+
+        node = FileNode.objects.get(path="/rechunk/json-damaged.bin")
+        damaged = FileBlock.objects.filter(file=node).order_by("sequence").last()
+        damaged.sequence = 5
+        damaged.save(update_fields=["sequence"])
+
+        out = StringIO()
+        with pytest.raises(CommandError) as exc_info:
+            call_command(
+                "fsspec_rechunk",
+                "--block-size=50",
+                "--json",
+                stdout=out,
+            )
+
+        payload = json.loads(out.getvalue())
+        assert exc_info.value.returncode == 1
+        assert payload["ok"] is False
+        assert payload["summary"]["errors"] == 1
+        assert payload["summary"]["files_skipped"] == 1
+        assert payload["skipped"][0]["file_id"] == node.id
+        assert payload["skipped"][0]["error"] == "DataIntegrityError"
 
     def test_rechunk_checksum_verify_skips_checksum_damage(self):
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
@@ -182,14 +246,16 @@ class TestFsspecRechunk(TestCase):
         block.save(update_fields=["checksum"])
 
         out = StringIO()
-        call_command(
-            "fsspec_rechunk",
-            "--block-size=50",
-            "--verify=checksum",
-            stdout=out,
-        )
+        with pytest.raises(CommandError) as exc_info:
+            call_command(
+                "fsspec_rechunk",
+                "--block-size=50",
+                "--verify=checksum",
+                stdout=out,
+            )
 
         node.refresh_from_db()
+        assert exc_info.value.returncode == 1
         assert node.block_size == 100
         assert "errors: 1" in out.getvalue()
 
@@ -202,13 +268,14 @@ class TestFsspecRechunk(TestCase):
         damaged.sequence = 5
         damaged.save(update_fields=["sequence"])
 
-        with pytest.raises(CommandError):
+        with pytest.raises(CommandError) as exc_info:
             call_command(
                 "fsspec_rechunk",
                 "--block-size=50",
                 "--on-error=abort",
                 stdout=StringIO(),
             )
+        assert exc_info.value.returncode == 2
 
     def test_rechunk_skips_version_conflict(self):
         with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=100):
@@ -225,16 +292,19 @@ class TestFsspecRechunk(TestCase):
 
         out = StringIO()
         with patch.object(rechunk_command, "_load_file_data", mutate_version):
-            call_command("fsspec_rechunk", "--block-size=50", stdout=out)
+            with pytest.raises(CommandError) as exc_info:
+                call_command("fsspec_rechunk", "--block-size=50", stdout=out)
 
         node = FileNode.objects.get(path="/rechunk/conflict.bin")
+        assert exc_info.value.returncode == 1
         assert node.block_size == 100
         assert node.version == 1
         assert "errors: 1" in out.getvalue()
 
     def test_rechunk_rejects_invalid_block_size(self):
-        with pytest.raises(CommandError):
+        with pytest.raises(CommandError) as exc_info:
             call_command("fsspec_rechunk", "--block-size=0", stdout=StringIO())
+        assert exc_info.value.returncode == 2
 
 
 class TestFsspecFsck(TestCase):
@@ -244,6 +314,14 @@ class TestFsspecFsck(TestCase):
         call_command("fsspec_fsck", stdout=out)
         assert "No errors found" in out.getvalue()
 
+    def test_fsck_json_healthy(self):
+        write_file(1, "/json-healthy.txt", b"hello world")
+        out = StringIO()
+        call_command("fsspec_fsck", "--json", stdout=out)
+
+        payload = json.loads(out.getvalue())
+        assert payload == {"ok": True, "findings": []}
+
     def test_fsck_corrupted_block_checksum(self):
         write_file(1, "/test.txt", b"hello")
         block = StorageBlock.objects.filter(is_free=False).first()
@@ -251,9 +329,25 @@ class TestFsspecFsck(TestCase):
         block.save(update_fields=["checksum"])
 
         out = StringIO()
-        with pytest.raises(CommandError):
+        with pytest.raises(CommandError) as exc_info:
             call_command("fsspec_fsck", stdout=out)
+        assert exc_info.value.returncode == 1
         assert "checksum mismatch" in out.getvalue()
+
+    def test_fsck_json_reports_findings(self):
+        write_file(1, "/json-corrupt.txt", b"hello")
+        block = StorageBlock.objects.filter(is_free=False).first()
+        block.checksum = "bad_checksum"
+        block.save(update_fields=["checksum"])
+
+        out = StringIO()
+        with pytest.raises(CommandError) as exc_info:
+            call_command("fsspec_fsck", "--json", stdout=out)
+
+        payload = json.loads(out.getvalue())
+        assert exc_info.value.returncode == 1
+        assert payload["ok"] is False
+        assert payload["findings"][0]["code"] == "block_checksum_mismatch"
 
     def test_fsck_corrupted_block_size(self):
         write_file(1, "/test.txt", b"hello")
@@ -452,6 +546,23 @@ class TestFsspecRepair(TestCase):
         with pytest.raises(CommandError):
             call_command("fsspec_fsck", stdout=StringIO())
 
+    def test_repair_json_dry_run_does_not_modify_data(self):
+        write_file(1, "/json-dry-run.txt", b"hello")
+        node = FileNode.objects.get(path="/json-dry-run.txt")
+        node.size = 999
+        node.save(update_fields=["size"])
+
+        out = StringIO()
+        call_command("fsspec_repair", "--dry-run", "--json", stdout=out)
+
+        payload = json.loads(out.getvalue())
+        node.refresh_from_db()
+        assert payload["ok"] is True
+        assert payload["dry_run"] is True
+        assert payload["unresolved"] is False
+        assert payload["summary"]["file_metadata"] == 1
+        assert node.size == 999
+
     def test_repair_healthy_filesystem_noop(self):
         write_file(1, "/healthy.txt", b"ok")
 
@@ -564,6 +675,24 @@ class TestFsspecRepair(TestCase):
         assert read_file(1, "/local.txt", verify_checksum=True) == b"local"
         with pytest.raises(CommandError):
             call_command("fsspec_fsck", "--namespace=2", stdout=StringIO())
+
+    def test_repair_json_unresolved_damage_returns_attention(self):
+        write_file(1, "/conflict.txt", b"file")
+        FileNode.objects.create(
+            namespace_id=1,
+            path="/conflict.txt/child",
+            node_type=NODE_TYPE_DIRECTORY,
+        )
+
+        out = StringIO()
+        with pytest.raises(CommandError) as exc_info:
+            call_command("fsspec_repair", "--dry-run", "--json", stdout=out)
+
+        payload = json.loads(out.getvalue())
+        assert exc_info.value.returncode == 1
+        assert payload["ok"] is False
+        assert payload["unresolved"] is True
+        assert payload["summary"]["path_conflicts"] == 1
 
 
 class TestFsspecNamespace(TestCase):

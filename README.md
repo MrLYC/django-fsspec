@@ -105,6 +105,7 @@ Full benchmark results, including concurrency and manually triggered seeded runs
 - [Benchmarks](docs/en/benchmarks.md)
 - [Block Size Operations](docs/en/block-size.md)
 - [Roadmap](docs/en/roadmap.md)
+- [Release Checklist](docs/en/release-checklist.md)
 - [Exceptions](docs/en/exceptions.md)
 
 [中文文档](README_zh.md) | [Chinese Documentation](README_zh.md)

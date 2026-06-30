@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -18,13 +19,23 @@ from django_fsspec.operations import (
 from django_fsspec.validators import validate_path
 
 
+EXIT_ATTENTION = 1
+EXIT_FAILURE = 2
+
+
 def positive_int(value):
     try:
         number = int(value)
     except (TypeError, ValueError):
-        raise CommandError(f"Expected a positive integer, got {value!r}")
+        raise CommandError(
+            f"Expected a positive integer, got {value!r}",
+            returncode=EXIT_FAILURE,
+        )
     if number <= 0:
-        raise CommandError(f"Expected a positive integer, got {value!r}")
+        raise CommandError(
+            f"Expected a positive integer, got {value!r}",
+            returncode=EXIT_FAILURE,
+        )
     return number
 
 
@@ -88,6 +99,11 @@ class Command(BaseCommand):
             default="skip",
             help="Whether to skip damaged files or abort the run",
         )
+        parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Emit machine-readable summary and skipped-file details",
+        )
 
     def handle(self, *args, **options):
         target_block_size = options["block_size"]
@@ -98,6 +114,7 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         verify = options["verify"]
         on_error = options["on_error"]
+        json_output = options["json"]
 
         qs = self._candidate_queryset(
             target_block_size=target_block_size,
@@ -120,11 +137,13 @@ class Command(BaseCommand):
             "old_blocks": 0,
             "new_blocks": 0,
         }
+        skipped = []
 
-        action = "Previewing" if dry_run else "Rechunking"
-        self.stdout.write(
-            f"{action} files to block size {target_block_size} bytes..."
-        )
+        if not json_output:
+            action = "Previewing" if dry_run else "Rechunking"
+            self.stdout.write(
+                f"{action} files to block size {target_block_size} bytes..."
+            )
 
         for file_id in file_ids:
             try:
@@ -144,20 +163,41 @@ class Command(BaseCommand):
             except Exception as exc:
                 summary["files_skipped"] += 1
                 summary["errors"] += 1
+                skipped.append(
+                    {
+                        "file_id": file_id,
+                        "reason": str(exc),
+                        "error": exc.__class__.__name__,
+                    }
+                )
                 message = f"FileNode {file_id}: {exc}"
                 if on_error == "abort":
-                    raise CommandError(message) from exc
-                self.stdout.write(self.style.WARNING(f"Skipped {message}"))
+                    if json_output:
+                        self._write_json(summary, skipped, dry_run)
+                    raise CommandError(
+                        message,
+                        returncode=EXIT_FAILURE,
+                    ) from exc
+                if not json_output:
+                    self.stdout.write(self.style.WARNING(f"Skipped {message}"))
                 continue
 
             if result.skipped:
                 summary["files_skipped"] += 1
+                skipped.append(
+                    {
+                        "file_id": file_id,
+                        "reason": result.reason,
+                        "error": "",
+                    }
+                )
                 if result.reason:
-                    self.stdout.write(
-                        self.style.WARNING(
-                            f"Skipped FileNode {file_id}: {result.reason}"
+                    if not json_output:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"Skipped FileNode {file_id}: {result.reason}"
+                            )
                         )
-                    )
                 continue
 
             summary["files_rechunked"] += 1
@@ -165,6 +205,34 @@ class Command(BaseCommand):
             summary["old_blocks"] += result.old_blocks
             summary["new_blocks"] += result.new_blocks
 
+        ok = summary["files_skipped"] == 0 and summary["errors"] == 0
+        if json_output:
+            self._write_json(summary, skipped, dry_run)
+        else:
+            self._write_human_summary(summary, dry_run)
+
+        if not ok:
+            raise CommandError(
+                "Rechunk completed with skipped files or errors",
+                returncode=EXIT_ATTENTION,
+            )
+
+    def _write_json(self, summary, skipped, dry_run):
+        self.stdout.write(
+            json.dumps(
+                {
+                    "ok": summary["files_skipped"] == 0
+                    and summary["errors"] == 0,
+                    "dry_run": dry_run,
+                    "summary": summary,
+                    "skipped": skipped,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    def _write_human_summary(self, summary, dry_run):
         self.stdout.write("")
         for label, count in summary.items():
             self.stdout.write(f"{label}: {count}")
@@ -217,7 +285,10 @@ class Command(BaseCommand):
         try:
             return validate_path(prefix)
         except Exception as exc:
-            raise CommandError(f"Invalid --prefix: {exc}") from exc
+            raise CommandError(
+                f"Invalid --prefix: {exc}",
+                returncode=EXIT_FAILURE,
+            ) from exc
 
     def _inspect_file(self, *, file_id, target_block_size, verify):
         file_node = FileNode.objects.get(pk=file_id)

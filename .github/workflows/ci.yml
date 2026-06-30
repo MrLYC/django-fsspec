@@ -52,6 +52,81 @@ jobs:
         run: |
           DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
 
+  package-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Verify wheel contents and version
+        run: |
+          python - <<'PY'
+          import email
+          import glob
+          import os
+          import sys
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected exactly one wheel, got {wheels!r}")
+
+          wheel = wheels[0]
+          errors = []
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+              forbidden_prefixes = ("demo/", "tests/", "django_fsspec/tests/")
+              forbidden_suffixes = (".pyc", ".pyo", ".sqlite3")
+
+              for name in names:
+                  if name.startswith(forbidden_prefixes):
+                      errors.append(f"Forbidden wheel path: {name}")
+                  if name.endswith(forbidden_suffixes) or "__pycache__/" in name:
+                      errors.append(f"Generated/local file in wheel: {name}")
+
+              if "django_fsspec/_version.py" not in names:
+                  errors.append("Generated django_fsspec/_version.py is missing")
+
+              metadata_names = [
+                  name for name in names if name.endswith(".dist-info/METADATA")
+              ]
+              if len(metadata_names) != 1:
+                  errors.append(
+                      f"Expected one METADATA file, got {metadata_names!r}"
+                  )
+                  version = None
+              else:
+                  metadata = email.message_from_bytes(zf.read(metadata_names[0]))
+                  version = metadata["Version"]
+
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/v") and version is not None:
+              tag_version = ref.removeprefix("refs/tags/v")
+              if tag_version != version:
+                  errors.append(
+                      f"Tag v{tag_version} does not match wheel version {version}"
+                  )
+
+          if errors:
+              for error in errors:
+                  print(f"ERROR: {error}", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"Wheel check passed: {wheel}")
+          PY
+
   # ---------------------------------------------------------------
   # Stage 2: E2E + Benchmark (real databases, after unit tests pass)
   # ---------------------------------------------------------------
@@ -317,7 +392,14 @@ jobs:
   # Stage 4: Publish to PyPI (tag push only)
   # ---------------------------------------------------------------
   publish:
-    needs: [unit-test, lint, e2e-sqlite, e2e-mysql, e2e-postgres, e2e-oracle]
+    needs:
+      - unit-test
+      - lint
+      - package-check
+      - e2e-sqlite
+      - e2e-mysql
+      - e2e-postgres
+      - e2e-oracle
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

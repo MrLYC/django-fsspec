@@ -526,9 +526,11 @@ class TestAdversarialFsckAndRepair(TestCase):
         _create_path_conflict()
 
         out = StringIO()
-        call_command("fsspec_repair", "--dry-run", stdout=out)
+        with pytest.raises(CommandError) as exc_info:
+            call_command("fsspec_repair", "--dry-run", stdout=out)
 
         output = out.getvalue()
+        assert exc_info.value.returncode == 1
         assert "path_conflicts: 1" in output
         assert "moved_descendants: 0" in output
         assert "Unresolved structural damage remains" in output
@@ -587,7 +589,9 @@ class TestAdversarialFsckAndRepair(TestCase):
         )
 
         out = StringIO()
-        call_command("fsspec_repair", "--dry-run", stdout=out)
+        with pytest.raises(CommandError) as exc_info:
+            call_command("fsspec_repair", "--dry-run", stdout=out)
 
+        assert exc_info.value.returncode == 1
         assert "invalid_paths: 1" in out.getvalue()
         assert "Unresolved structural damage remains" in out.getvalue()
