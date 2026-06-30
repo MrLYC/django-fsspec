@@ -11,11 +11,14 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 # 只运行一个场景
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
+# 使用指定 block size 运行一个场景
+DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 65536
+
 # 保存 JSON 输出
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
 ```
 
-`--db` 是结果展示标签。实际 Django 数据库后端在启动前通过 `DJANGO_FSSPEC_BENCH_DB` 选择。
+`--db` 是结果展示标签。实际 Django 数据库后端在启动前通过 `DJANGO_FSSPEC_BENCH_DB` 选择。`--block-size` 会在本次 benchmark 进程中覆盖 `DJANGO_FSSPEC_BLOCK_SIZE`，并以 `block_size` 写入每条 JSON 结果。
 
 ## 测试与 E2E 配置
 
@@ -70,6 +73,24 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `large` | 手动大规模大表 benchmark | 50,000 | 500 | 500 | 3 |
 
 所有规模都会保留原有写入、读取、删除、列目录和并发场景的固定操作次数。Push/PR CI 只运行 `--scale ci --seed 1`。手动 `small` 规模用于避免从 CI 的 100 个铺底文件直接跳到 medium 的 10,000 个铺底文件。
+
+## Block Size 对比
+
+部分数据库会把 Django `BinaryField` 落到 text/CLOB 类存储。对这些实现来说，256KB 单行数据可能比更小的块更慢，因为编码、内存拷贝、redo/undo 日志和 out-of-row LOB 处理都会更明显。生产前建议在同一个数据库和同一个规模下对比多个 block size：
+
+```bash
+for bs in 32768 65536 131072 262144; do
+  DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py \
+    --db "sqlite-bs-${bs}" \
+    --scale small \
+    --seed 1 \
+    --scenario write_large \
+    --block-size "$bs" \
+    --json "/tmp/django-fsspec-write-large-bs-${bs}.json"
+done
+```
+
+建议至少覆盖 `write_large`、`read_large`、`seek_read`、`overwrite`、`concurrent_write`，以及一个铺底场景，例如 `seeded_find`。手动 GitHub Actions workflow 也可以把 `block_size_kb` 设置为 `all`，一次跑完整 block-size 矩阵。
 
 ## 性能预期
 
@@ -253,6 +274,7 @@ CI 规模数据来自 2026-06-30 的成功 GitHub Actions CI run [`28412676243`]
 - `backend`：`DJANGO_FSSPEC_BENCH_DB`
 - `scale`
 - `seed`
+- `block_size`：本次 benchmark 实际使用的 `DJANGO_FSSPEC_BLOCK_SIZE`，单位为字节
 
 手动铺底数据通过 GitHub Actions workflow **Large Benchmark** 运行。输入项：
 
@@ -262,5 +284,6 @@ CI 规模数据来自 2026-06-30 的成功 GitHub Actions CI run [`28412676243`]
 | `scale` | `small`、`medium`、`large` |
 | `seed` | 整数 seed，默认 `1` |
 | `scenario` | `all` 或任意 benchmark 场景名 |
+| `block_size_kb` | `32`、`64`、`128`、`256` 或 `all` |
 
-手动 workflow 每次只运行一个数据库，并上传按数据库、规模、seed 命名的 JSON artifacts。
+手动 workflow 每次只运行一个数据库，并上传按数据库、规模、seed 和 block size 命名的 JSON artifacts。

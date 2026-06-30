@@ -26,6 +26,16 @@ on:
       scenario:
         description: Scenario name, or all
         default: all
+      block_size_kb:
+        description: Block size in KiB, or all
+        type: choice
+        default: "256"
+        options:
+          - all
+          - "32"
+          - "64"
+          - "128"
+          - "256"
 
 jobs:
   large-benchmark-sqlite:
@@ -48,24 +58,34 @@ jobs:
           SCALE_INPUT: ${{ inputs.scale }}
           SEED_INPUT: ${{ inputs.seed }}
           SCENARIO_INPUT: ${{ inputs.scenario }}
+          BLOCK_SIZE_KB_INPUT: ${{ inputs.block_size_kb }}
         run: |
           SCENARIO_ARGS=()
           if [ "$SCENARIO_INPUT" != "all" ]; then
             SCENARIO_ARGS=(--scenario "$SCENARIO_INPUT")
           fi
+          if [ "$BLOCK_SIZE_KB_INPUT" = "all" ]; then
+            BLOCK_SIZES_KB=(32 64 128 256)
+          else
+            BLOCK_SIZES_KB=("$BLOCK_SIZE_KB_INPUT")
+          fi
 
-          python benchmarks/run.py \
-            --db "sqlite-$SCALE_INPUT" \
-            --scale "$SCALE_INPUT" \
-            --seed "$SEED_INPUT" \
-            --json "benchmarks/results-sqlite-$SCALE_INPUT-seed-$SEED_INPUT.json" \
-            "${SCENARIO_ARGS[@]}"
+          for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
+            BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
+            python benchmarks/run.py \
+              --db "sqlite-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
+              --scale "$SCALE_INPUT" \
+              --seed "$SEED_INPUT" \
+              --block-size "$BLOCK_SIZE_BYTES" \
+              --json "benchmarks/results-sqlite-$SCALE_INPUT-seed-$SEED_INPUT-block-${BLOCK_SIZE_KB}k.json" \
+              "${SCENARIO_ARGS[@]}"
+          done
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: large-benchmark-sqlite-${{ inputs.scale }}-seed-${{ inputs.seed }}
-          path: benchmarks/results-sqlite-${{ inputs.scale }}-seed-${{ inputs.seed }}.json
+          name: large-benchmark-sqlite-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-${{ inputs.block_size_kb }}
+          path: benchmarks/results-sqlite-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-*.json
           retention-days: 30
 
   large-benchmark-mysql:
@@ -114,24 +134,34 @@ jobs:
           SCALE_INPUT: ${{ inputs.scale }}
           SEED_INPUT: ${{ inputs.seed }}
           SCENARIO_INPUT: ${{ inputs.scenario }}
+          BLOCK_SIZE_KB_INPUT: ${{ inputs.block_size_kb }}
         run: |
           SCENARIO_ARGS=()
           if [ "$SCENARIO_INPUT" != "all" ]; then
             SCENARIO_ARGS=(--scenario "$SCENARIO_INPUT")
           fi
+          if [ "$BLOCK_SIZE_KB_INPUT" = "all" ]; then
+            BLOCK_SIZES_KB=(32 64 128 256)
+          else
+            BLOCK_SIZES_KB=("$BLOCK_SIZE_KB_INPUT")
+          fi
 
-          python benchmarks/run.py \
-            --db "mysql-$SCALE_INPUT" \
-            --scale "$SCALE_INPUT" \
-            --seed "$SEED_INPUT" \
-            --json "benchmarks/results-mysql-$SCALE_INPUT-seed-$SEED_INPUT.json" \
-            "${SCENARIO_ARGS[@]}"
+          for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
+            BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
+            python benchmarks/run.py \
+              --db "mysql-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
+              --scale "$SCALE_INPUT" \
+              --seed "$SEED_INPUT" \
+              --block-size "$BLOCK_SIZE_BYTES" \
+              --json "benchmarks/results-mysql-$SCALE_INPUT-seed-$SEED_INPUT-block-${BLOCK_SIZE_KB}k.json" \
+              "${SCENARIO_ARGS[@]}"
+          done
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: large-benchmark-mysql-${{ inputs.scale }}-seed-${{ inputs.seed }}
-          path: benchmarks/results-mysql-${{ inputs.scale }}-seed-${{ inputs.seed }}.json
+          name: large-benchmark-mysql-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-${{ inputs.block_size_kb }}
+          path: benchmarks/results-mysql-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-*.json
           retention-days: 30
 
   large-benchmark-postgres:
@@ -171,24 +201,34 @@ jobs:
           SCALE_INPUT: ${{ inputs.scale }}
           SEED_INPUT: ${{ inputs.seed }}
           SCENARIO_INPUT: ${{ inputs.scenario }}
+          BLOCK_SIZE_KB_INPUT: ${{ inputs.block_size_kb }}
         run: |
           SCENARIO_ARGS=()
           if [ "$SCENARIO_INPUT" != "all" ]; then
             SCENARIO_ARGS=(--scenario "$SCENARIO_INPUT")
           fi
+          if [ "$BLOCK_SIZE_KB_INPUT" = "all" ]; then
+            BLOCK_SIZES_KB=(32 64 128 256)
+          else
+            BLOCK_SIZES_KB=("$BLOCK_SIZE_KB_INPUT")
+          fi
 
-          python benchmarks/run.py \
-            --db "postgres-$SCALE_INPUT" \
-            --scale "$SCALE_INPUT" \
-            --seed "$SEED_INPUT" \
-            --json "benchmarks/results-postgres-$SCALE_INPUT-seed-$SEED_INPUT.json" \
-            "${SCENARIO_ARGS[@]}"
+          for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
+            BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
+            python benchmarks/run.py \
+              --db "postgres-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
+              --scale "$SCALE_INPUT" \
+              --seed "$SEED_INPUT" \
+              --block-size "$BLOCK_SIZE_BYTES" \
+              --json "benchmarks/results-postgres-$SCALE_INPUT-seed-$SEED_INPUT-block-${BLOCK_SIZE_KB}k.json" \
+              "${SCENARIO_ARGS[@]}"
+          done
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: large-benchmark-postgres-${{ inputs.scale }}-seed-${{ inputs.seed }}
-          path: benchmarks/results-postgres-${{ inputs.scale }}-seed-${{ inputs.seed }}.json
+          name: large-benchmark-postgres-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-${{ inputs.block_size_kb }}
+          path: benchmarks/results-postgres-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-*.json
           retention-days: 30
 
   large-benchmark-oracle:
@@ -228,22 +268,32 @@ jobs:
           SCALE_INPUT: ${{ inputs.scale }}
           SEED_INPUT: ${{ inputs.seed }}
           SCENARIO_INPUT: ${{ inputs.scenario }}
+          BLOCK_SIZE_KB_INPUT: ${{ inputs.block_size_kb }}
         run: |
           SCENARIO_ARGS=()
           if [ "$SCENARIO_INPUT" != "all" ]; then
             SCENARIO_ARGS=(--scenario "$SCENARIO_INPUT")
           fi
+          if [ "$BLOCK_SIZE_KB_INPUT" = "all" ]; then
+            BLOCK_SIZES_KB=(32 64 128 256)
+          else
+            BLOCK_SIZES_KB=("$BLOCK_SIZE_KB_INPUT")
+          fi
 
-          python benchmarks/run.py \
-            --db "oracle-$SCALE_INPUT" \
-            --scale "$SCALE_INPUT" \
-            --seed "$SEED_INPUT" \
-            --json "benchmarks/results-oracle-$SCALE_INPUT-seed-$SEED_INPUT.json" \
-            "${SCENARIO_ARGS[@]}"
+          for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
+            BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
+            python benchmarks/run.py \
+              --db "oracle-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
+              --scale "$SCALE_INPUT" \
+              --seed "$SEED_INPUT" \
+              --block-size "$BLOCK_SIZE_BYTES" \
+              --json "benchmarks/results-oracle-$SCALE_INPUT-seed-$SEED_INPUT-block-${BLOCK_SIZE_KB}k.json" \
+              "${SCENARIO_ARGS[@]}"
+          done
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: large-benchmark-oracle-${{ inputs.scale }}-seed-${{ inputs.seed }}
-          path: benchmarks/results-oracle-${{ inputs.scale }}-seed-${{ inputs.seed }}.json
+          name: large-benchmark-oracle-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-${{ inputs.block_size_kb }}
+          path: benchmarks/results-oracle-${{ inputs.scale }}-seed-${{ inputs.seed }}-block-*.json
           retention-days: 30

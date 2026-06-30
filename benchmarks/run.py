@@ -13,6 +13,9 @@ Usage:
 
     # Run scale-based seeded scenarios
     python benchmarks/run.py --scale small --scenario seeded_exists
+
+    # Compare a specific block size
+    python benchmarks/run.py --scale small --block-size 65536 --scenario write_large
 """
 
 import argparse
@@ -176,6 +179,16 @@ def require_positive(name, value):
     return value
 
 
+def positive_int(value):
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
 def get_count(ctx, name):
     return require_positive(name, ctx["scale_config"][name])
 
@@ -189,10 +202,13 @@ def split_evenly(items, n_batches):
     return batches
 
 
-def make_context(scale, seed):
+def make_context(scale, seed, block_size=None):
+    if block_size is not None:
+        block_size = require_positive("block_size", block_size)
     return {
         "scale": scale,
         "seed": seed,
+        "block_size": block_size,
         "scale_config": SCALES[scale],
         "backend": os.environ.get("DJANGO_FSSPEC_BENCH_DB", "sqlite"),
     }
@@ -203,6 +219,7 @@ def add_result_metadata(result, db_name, ctx):
     result["backend"] = ctx["backend"]
     result["scale"] = ctx["scale"]
     result["seed"] = ctx["seed"]
+    result["block_size"] = ctx["block_size"]
     return result
 
 
@@ -637,14 +654,22 @@ def run_benchmark(db_name, scenarios, ctx):
     """Run benchmark scenarios on a specific database."""
     setup_django()
 
+    from django.conf import settings
     from django.core.management import call_command
 
     from django_fsspec.fs import DjangoFileSystem
+    from django_fsspec.models import get_block_size
+
+    if ctx["block_size"] is not None:
+        settings.DJANGO_FSSPEC_BLOCK_SIZE = ctx["block_size"]
+    else:
+        ctx["block_size"] = get_block_size()
 
     print(f"\n{'=' * 60}")
     print(f"  Database: {db_name}")
     print(f"  Backend:  {ctx['backend']}")
     print(f"  Scale:    {ctx['scale']}  Seed: {ctx['seed']}")
+    print(f"  Block:    {ctx['block_size']} bytes")
     print(f"{'=' * 60}")
 
     call_command("migrate", verbosity=0)
@@ -694,6 +719,9 @@ def print_summary_table(all_results):
     seeds = sorted({str(r.get("seed", "?")) for r in all_results})
     if len(scales) == 1 and len(seeds) == 1:
         print(f"\nScale: {scales[0]}  Seed: {seeds[0]}")
+    block_sizes = sorted({str(r.get("block_size", "?")) for r in all_results})
+    if len(block_sizes) == 1:
+        print(f"Block size: {block_sizes[0]} bytes")
 
     ops = {}
     for r in all_results:
@@ -743,6 +771,13 @@ def main():
         "--seed", type=int, default=1,
         help="Deterministic dataset seed",
     )
+    parser.add_argument(
+        "--block-size", type=positive_int, default=None,
+        help=(
+            "Override DJANGO_FSSPEC_BLOCK_SIZE for this benchmark run, in bytes. "
+            "Useful for comparing 32768, 65536, 131072, and 262144 byte blocks."
+        ),
+    )
     args = parser.parse_args()
 
     scenarios = select_scenarios(args.scale, args.scenario)
@@ -751,7 +786,7 @@ def main():
 
     if args.db:
         os.environ.setdefault("DJANGO_FSSPEC_BENCH_DB", "sqlite")
-        ctx = make_context(args.scale, args.seed)
+        ctx = make_context(args.scale, args.seed, args.block_size)
         results = run_benchmark(args.db, scenarios, ctx)
         all_results.extend(results)
     else:
@@ -759,7 +794,8 @@ def main():
         scenario_arg = ["--scenario", args.scenario] if args.scenario else []
         json_files = []
         for db in db_list:
-            json_file = f"/tmp/bench_{db}_{args.scale}_seed_{args.seed}.json"
+            block_suffix = f"_bs_{args.block_size}" if args.block_size else ""
+            json_file = f"/tmp/bench_{db}_{args.scale}_seed_{args.seed}{block_suffix}.json"
             json_files.append((db, json_file))
             env = os.environ.copy()
             env["DJANGO_FSSPEC_BENCH_DB"] = db
@@ -771,7 +807,9 @@ def main():
                     "--json", json_file,
                     "--scale", args.scale,
                     "--seed", str(args.seed),
-                ] + scenario_arg,
+                ]
+                + (["--block-size", str(args.block_size)] if args.block_size else [])
+                + scenario_arg,
                 env=env, capture_output=True, text=True,
             )
             print(result.stdout, end="")

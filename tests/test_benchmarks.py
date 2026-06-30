@@ -1,4 +1,7 @@
+import argparse
 import importlib
+
+import pytest
 
 
 bench = importlib.import_module("benchmarks.run")
@@ -64,6 +67,30 @@ def test_select_scenarios_allows_explicit_seeded_ci_scenario():
     assert list(scenarios) == ["seeded_exists"]
 
 
+def test_make_context_records_optional_block_size(monkeypatch):
+    monkeypatch.setenv("DJANGO_FSSPEC_BENCH_DB", "mysql")
+
+    ctx = bench.make_context("small", 7, 64 * 1024)
+
+    assert ctx["backend"] == "mysql"
+    assert ctx["scale"] == "small"
+    assert ctx["seed"] == 7
+    assert ctx["block_size"] == 64 * 1024
+
+
+def test_make_context_rejects_invalid_block_size():
+    with pytest.raises(ValueError):
+        bench.make_context("small", 7, 0)
+
+
+def test_positive_int_rejects_invalid_values():
+    assert bench.positive_int("32768") == 32768
+    with pytest.raises(argparse.ArgumentTypeError):
+        bench.positive_int("0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        bench.positive_int("not-an-int")
+
+
 def test_summarize_computes_expected_fields():
     result = bench.summarize({"op": "example", "count": 4, "times": [0.1, 0.2, 0.3, 0.4]})
 
@@ -78,7 +105,7 @@ def test_summarize_computes_expected_fields():
 
 def test_add_result_metadata_includes_benchmark_context(monkeypatch):
     monkeypatch.setenv("DJANGO_FSSPEC_BENCH_DB", "postgres")
-    ctx = bench.make_context("medium", 42)
+    ctx = bench.make_context("medium", 42, 128 * 1024)
 
     result = bench.add_result_metadata({"op": "example"}, "postgres-medium", ctx)
 
@@ -86,6 +113,7 @@ def test_add_result_metadata_includes_benchmark_context(monkeypatch):
     assert result["backend"] == "postgres"
     assert result["scale"] == "medium"
     assert result["seed"] == 42
+    assert result["block_size"] == 128 * 1024
 
 
 def test_split_evenly_preserves_remainder_items():

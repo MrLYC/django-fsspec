@@ -11,11 +11,14 @@ DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --
 # Run one scenario
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
+# Run one scenario with a specific block size
+DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 65536
+
 # Save JSON output
 DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
 ```
 
-`--db` is a result label. The actual Django database backend is selected before startup with `DJANGO_FSSPEC_BENCH_DB`.
+`--db` is a result label. The actual Django database backend is selected before startup with `DJANGO_FSSPEC_BENCH_DB`. `--block-size` overrides `DJANGO_FSSPEC_BLOCK_SIZE` for the benchmark process and is recorded in each JSON result as `block_size`.
 
 ## Test and E2E configuration
 
@@ -70,6 +73,24 @@ After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fss
 | `large` | Manual large-table benchmark | 50,000 | 500 | 500 | 3 |
 
 All scales keep the original fixed operation counts for write/read/delete/list/concurrent scenarios. Push/PR CI runs `--scale ci --seed 1` only. The `small` manual scale exists to avoid jumping directly from CI's 100 seeded files to medium's 10,000 seeded files.
+
+## Block-size comparisons
+
+Some database backends expose Django `BinaryField` through text/CLOB-like storage. For those implementations, 256KB rows can be slower than smaller chunks because encoding, memory copies, redo/undo logs, and out-of-row LOB handling become more visible. Use the same database and scale with multiple block sizes before choosing a production default:
+
+```bash
+for bs in 32768 65536 131072 262144; do
+  DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py \
+    --db "sqlite-bs-${bs}" \
+    --scale small \
+    --seed 1 \
+    --scenario write_large \
+    --block-size "$bs" \
+    --json "/tmp/django-fsspec-write-large-bs-${bs}.json"
+done
+```
+
+For broad coverage, run at least `write_large`, `read_large`, `seek_read`, `overwrite`, `concurrent_write`, and one seeded scenario such as `seeded_find`. The manual GitHub Actions workflow can also run a block-size matrix by setting `block_size_kb` to `all`.
 
 ## Performance expectations
 
@@ -253,6 +274,7 @@ Normal CI runs bounded benchmarks on every push and pull request, and uploads JS
 - `backend`: `DJANGO_FSSPEC_BENCH_DB`
 - `scale`
 - `seed`
+- `block_size`: effective `DJANGO_FSSPEC_BLOCK_SIZE` in bytes
 
 Manual seeded runs use the GitHub Actions workflow **Large Benchmark**. Inputs:
 
@@ -262,5 +284,6 @@ Manual seeded runs use the GitHub Actions workflow **Large Benchmark**. Inputs:
 | `scale` | `small`, `medium`, `large` |
 | `seed` | Integer seed, default `1` |
 | `scenario` | `all` or any benchmark scenario name |
+| `block_size_kb` | `32`, `64`, `128`, `256`, or `all` |
 
-The manual workflow runs one database at a time and uploads JSON artifacts named with database, scale, and seed.
+The manual workflow runs one database at a time and uploads JSON artifacts named with database, scale, seed, and block size.
