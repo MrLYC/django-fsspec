@@ -6,16 +6,16 @@
 
 ```bash
 # Default CI-scale benchmark against the configured SQLite backend
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1
 
 # Run one scenario
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
 # Run one scenario with a specific block size
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
 
 # Save JSON output
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
 ```
 
 `--db` is a result label. The actual Django database backend is selected before startup with `DJANGO_FSSPEC_BENCH_DB`. `--block-size` overrides `DJANGO_FSSPEC_BLOCK_SIZE` for the benchmark process and is recorded in each JSON result as `block_size`.
@@ -53,12 +53,13 @@ The E2E suite covers these user-facing workflows:
 Run these before publishing or when changing storage semantics:
 
 ```bash
-python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
-DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
-python demo/manage.py check
-python benchmarks/e2e_test.py
-python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
-python -m build --wheel --outdir /tmp/django-fsspec-build-check
+uv sync --extra dev --frozen
+uv run python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
+DJANGO_SETTINGS_MODULE=demo.settings uv run python -m django makemigrations --check --dry-run
+uv run python demo/manage.py check
+uv run python benchmarks/e2e_test.py
+uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 ```
 
 After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fsspec/tests/` are not present in the wheel contents. The generated `django_fsspec/_version.py` should appear in the wheel, but it is ignored in the repository because it is produced by `hatch-vcs`.
@@ -80,7 +81,7 @@ Some database backends expose Django `BinaryField` through text/CLOB-like storag
 
 ```bash
 for bs in 32768 65536 131072 262144; do
-  DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py \
+  DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py \
     --db "sqlite-bs-${bs}" \
     --scale small \
     --seed 1 \
@@ -222,7 +223,7 @@ These rows come from the same `--scale large --seed 1` artifacts as the seeded r
 
 ### Large seeded results
 
-These runs use `--scale large --seed 1`, which seeds 50,000 files across 500 directories. Dataset creation is excluded from the measured timings. The manual Large Benchmark workflow does not run a Django-version matrix; it installs the project's normal `django>=4.2` dependency set at run time.
+These runs use `--scale large --seed 1`, which seeds 50,000 files across 500 directories. Dataset creation is excluded from the measured timings. The manual Large Benchmark workflow does not run a Django-version matrix; it installs the project's normal `django>=4.2,<6.0` dependency set at run time.
 
 | Scenario | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
 |----------|--------|-----------|---------------|-----------|

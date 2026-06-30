@@ -6,12 +6,13 @@ the tag should only be created after `main` is green.
 ## Required Checks
 
 ```bash
-python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
-DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
-python demo/manage.py check
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/e2e_test.py
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
-python -m build --wheel --outdir /tmp/django-fsspec-build-check
+uv sync --extra dev --frozen
+uv run python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
+DJANGO_SETTINGS_MODULE=demo.settings uv run python -m django makemigrations --check --dry-run
+uv run python demo/manage.py check
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/e2e_test.py
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 ```
 
 After building the wheel, verify that it does not include `demo/`, top-level
@@ -25,9 +26,10 @@ should remain ignored in the repository.
    Chinese docs.
 2. Update `CHANGELOG.md` under `Unreleased`.
 3. Confirm no Django migration is needed with `makemigrations --check --dry-run`.
-4. Confirm the CI `package-check` job passes on `main`.
-5. Create the `vX.Y.Z` tag only after `main` CI is green.
-6. Confirm the publish workflow verifies that the wheel metadata version matches
+4. Confirm `uv.lock` is current with `uv lock --check`.
+5. Confirm the CI `package-check` job passes on `main`.
+6. Create the `vX.Y.Z` tag only after `main` CI is green.
+7. Confirm the publish workflow verifies that the wheel metadata version matches
    the tag version.
 
 ## Boundaries

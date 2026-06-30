@@ -6,16 +6,16 @@
 
 ```bash
 # 使用已配置的 SQLite 后端运行默认 CI 规模 benchmark
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1
 
 # 只运行一个场景
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small
 
 # 使用指定 block size 运行一个场景
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_large --block-size 32768
 
 # 保存 JSON 输出
-DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
+DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --json /tmp/bench.json
 ```
 
 `--db` 是结果展示标签。实际 Django 数据库后端在启动前通过 `DJANGO_FSSPEC_BENCH_DB` 选择。`--block-size` 会在本次 benchmark 进程中覆盖 `DJANGO_FSSPEC_BLOCK_SIZE`，并以 `block_size` 写入每条 JSON 结果。
@@ -53,12 +53,13 @@ E2E 覆盖这些面向用户的工作流：
 发布前或修改存储语义时建议运行：
 
 ```bash
-python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
-DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
-python demo/manage.py check
-python benchmarks/e2e_test.py
-python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
-python -m build --wheel --outdir /tmp/django-fsspec-build-check
+uv sync --extra dev --frozen
+uv run python -m pytest tests/ -q --cov=django_fsspec --cov-report=term-missing
+DJANGO_SETTINGS_MODULE=demo.settings uv run python -m django makemigrations --check --dry-run
+uv run python demo/manage.py check
+uv run python benchmarks/e2e_test.py
+uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 ```
 
 构建 wheel 后，应确认 wheel 内容中没有 `demo/`、顶层 `tests/` 或 `django_fsspec/tests/`。生成的 `django_fsspec/_version.py` 应存在于 wheel 中，但它由 `hatch-vcs` 生成，仓库中会忽略该文件。
@@ -80,7 +81,7 @@ python -m build --wheel --outdir /tmp/django-fsspec-build-check
 
 ```bash
 for bs in 32768 65536 131072 262144; do
-  DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py \
+  DJANGO_FSSPEC_BENCH_DB=sqlite uv run python benchmarks/run.py \
     --db "sqlite-bs-${bs}" \
     --scale small \
     --seed 1 \
@@ -222,7 +223,7 @@ CI 规模数据来自 2026-06-30 的成功 GitHub Actions CI run [`28412676243`]
 
 ### Large 铺底结果
 
-这些 run 使用 `--scale large --seed 1`，即在 500 个目录中铺底 50,000 个文件。铺底数据创建时间不计入测量耗时。手动 Large Benchmark workflow 不运行 Django 版本矩阵，而是在运行时安装项目正常的 `django>=4.2` 依赖集合。
+这些 run 使用 `--scale large --seed 1`，即在 500 个目录中铺底 50,000 个文件。铺底数据创建时间不计入测量耗时。手动 Large Benchmark workflow 不运行 Django 版本矩阵，而是在运行时安装项目正常的 `django>=4.2,<6.0` 依赖集合。
 
 | 场景 | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 |
 |------|--------|-----------|---------------|-----------|

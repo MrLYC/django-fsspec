@@ -26,14 +26,20 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install "django~=${{ matrix.django-version }}.0"
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python "django~=${{ matrix.django-version }}.0"
 
       - name: Run unit tests
         run: |
-          python -m pytest tests/ -v --cov=django_fsspec --cov-report=term-missing
+          uv run --no-sync python -m pytest tests/ -v --cov=django_fsspec --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -45,12 +51,21 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
+      - name: Check uv lock
+        run: uv lock --check
+
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --extra dev --frozen
 
       - name: Check migrations
         run: |
-          DJANGO_SETTINGS_MODULE=demo.settings python -m django makemigrations --check --dry-run
+          DJANGO_SETTINGS_MODULE=demo.settings uv run --no-sync python -m django makemigrations --check --dry-run
 
   package-check:
     runs-on: ubuntu-latest
@@ -64,15 +79,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build tools
-        run: pip install build
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
 
       - name: Build wheel
-        run: python -m build --wheel
+        run: uv run --no-sync python -m build --wheel
 
       - name: Verify wheel contents and version
         run: |
-          python - <<'PY'
+          uv run --no-sync python - <<'PY'
           import email
           import glob
           import os
@@ -141,14 +162,20 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --extra dev --frozen
 
       - name: E2E tests
-        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/e2e_test.py
+        run: DJANGO_FSSPEC_BENCH_DB=sqlite uv run --no-sync python benchmarks/e2e_test.py
 
       - name: Benchmark
-        run: DJANGO_FSSPEC_BENCH_DB=sqlite python benchmarks/run.py --db sqlite --scale ci --seed 1 --json benchmarks/results-sqlite.json
+        run: DJANGO_FSSPEC_BENCH_DB=sqlite uv run --no-sync python benchmarks/run.py --db sqlite --scale ci --seed 1 --json benchmarks/results-sqlite.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -191,6 +218,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Configure MySQL charset
         run: |
           for i in 1 2 3 4 5; do
@@ -201,21 +234,20 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install mysqlclient
-          pip install "django~=${{ matrix.django-version }}.0"
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python mysqlclient "django~=${{ matrix.django-version }}.0"
 
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: python benchmarks/e2e_test.py
+        run: uv run --no-sync python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: mysql
           MYSQL_PORT: "3306"
-        run: python benchmarks/run.py --db mysql-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
+        run: uv run --no-sync python benchmarks/run.py --db mysql-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-mysql-${{ matrix.mysql-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -257,23 +289,28 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install psycopg2-binary
-          pip install "django~=${{ matrix.django-version }}.0"
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python psycopg2-binary "django~=${{ matrix.django-version }}.0"
 
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: python benchmarks/e2e_test.py
+        run: uv run --no-sync python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: postgres
           POSTGRES_PORT: "5432"
-        run: python benchmarks/run.py --db postgres-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
+        run: uv run --no-sync python benchmarks/run.py --db postgres-django-${{ matrix.django-version }} --scale ci --seed 1 --json benchmarks/results-postgres-${{ matrix.pg-version }}-django-${{ matrix.django-version }}.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -308,20 +345,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install "oracledb<4"
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python "oracledb<4"
 
       - name: E2E tests
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
-        run: python benchmarks/e2e_test.py
+        run: uv run --no-sync python benchmarks/e2e_test.py
 
       - name: Benchmark
         env:
           DJANGO_FSSPEC_BENCH_DB: oracle
-        run: python benchmarks/run.py --db oracle --scale ci --seed 1 --json benchmarks/results-oracle.json
+        run: uv run --no-sync python benchmarks/run.py --db oracle --scale ci --seed 1 --json benchmarks/results-oracle.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -414,16 +457,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build tools
-        run: pip install build twine
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
 
       - name: Build package
-        run: python -m build
+        run: uv run --no-sync python -m build
 
       - name: Verify tag matches version
         run: |
           TAG=${GITHUB_REF#refs/tags/v}
-          VERSION=$(python -c "
+          VERSION=$(uv run --no-sync python -c "
           import zipfile, glob
           whl = glob.glob('dist/*.whl')[0]
           # Extract version from wheel filename: name-version-...
@@ -440,4 +489,4 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+        run: uv run --no-sync twine upload dist/*

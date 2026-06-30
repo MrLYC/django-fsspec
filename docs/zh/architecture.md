@@ -176,6 +176,6 @@ transaction 状态保存在 filesystem 实例的线程局部状态中，因此�
 ```bash
 git clone https://github.com/MrLYC/django-fsspec.git
 cd django-fsspec
-pip install -e ".[dev]"
-python -m pytest tests/ -v --cov=django_fsspec
+uv sync --extra dev --frozen
+uv run python -m pytest tests/ -v --cov=django_fsspec
 ```

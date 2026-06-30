@@ -185,6 +185,6 @@ Benchmarked on GitHub Actions (ubuntu-latest) with the historical 256KB block si
 ```bash
 git clone https://github.com/MrLYC/django-fsspec.git
 cd django-fsspec
-pip install -e ".[dev]"
-python -m pytest tests/ -v --cov=django_fsspec
+uv sync --extra dev --frozen
+uv run python -m pytest tests/ -v --cov=django_fsspec
 ```

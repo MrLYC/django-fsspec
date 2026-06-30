@@ -6,11 +6,13 @@
 - Add `fsspec_rechunk` as the repeatable operational command for rewriting existing files to a target block size with dry-run, filters, checksum verification, and skip/abort error handling.
 - Add JSON output for `fsspec_repair` and `fsspec_rechunk`.
 - Add a release checklist and CI package checks for wheel contents and tag version consistency.
+- Add `uv.lock` and use uv for development, CI, benchmark, and release dependency management.
 
 ### Changed
 - Change the default block size from 256KB to 32KB and document 32KB as the conservative default for small files and broad database compatibility.
 - Rework block-size guidance so changing `DJANGO_FSSPEC_BLOCK_SIZE` does not imply a Django migration; old and new block sizes coexist by design.
 - Define stable operational exit codes for `fsspec_fsck`, `fsspec_repair`, and `fsspec_rechunk`.
+- Constrain the supported Django dependency range to `>=4.2,<6.0`, matching the tested Django 4.2 and 5.2 matrix.
 
 ### Removed
 - Remove the `RechunkOperation` migration API. Rechunking user data is now an explicit management command, not a package migration operation.

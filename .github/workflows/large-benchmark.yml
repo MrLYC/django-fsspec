@@ -49,8 +49,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --extra dev --frozen
 
       - name: Run benchmark
         env:
@@ -72,7 +78,7 @@ jobs:
 
           for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
             BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
-            python benchmarks/run.py \
+            uv run --no-sync python benchmarks/run.py \
               --db "sqlite-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
               --scale "$SCALE_INPUT" \
               --seed "$SEED_INPUT" \
@@ -114,6 +120,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Configure MySQL charset
         run: |
           for i in 1 2 3 4 5; do
@@ -124,8 +136,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install mysqlclient
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python mysqlclient
 
       - name: Run benchmark
         env:
@@ -148,7 +160,7 @@ jobs:
 
           for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
             BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
-            python benchmarks/run.py \
+            uv run --no-sync python benchmarks/run.py \
               --db "mysql-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
               --scale "$SCALE_INPUT" \
               --seed "$SEED_INPUT" \
@@ -189,10 +201,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install psycopg2-binary
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python psycopg2-binary
 
       - name: Run benchmark
         env:
@@ -215,7 +233,7 @@ jobs:
 
           for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
             BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
-            python benchmarks/run.py \
+            uv run --no-sync python benchmarks/run.py \
               --db "postgres-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
               --scale "$SCALE_INPUT" \
               --seed "$SEED_INPUT" \
@@ -257,10 +275,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.12"
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
-          pip install "oracledb<4"
+          uv sync --extra dev --frozen
+          uv pip install --python .venv/bin/python "oracledb<4"
 
       - name: Run benchmark
         env:
@@ -282,7 +306,7 @@ jobs:
 
           for BLOCK_SIZE_KB in "${BLOCK_SIZES_KB[@]}"; do
             BLOCK_SIZE_BYTES=$((BLOCK_SIZE_KB * 1024))
-            python benchmarks/run.py \
+            uv run --no-sync python benchmarks/run.py \
               --db "oracle-$SCALE_INPUT-bs${BLOCK_SIZE_KB}k" \
               --scale "$SCALE_INPUT" \
               --seed "$SEED_INPUT" \
