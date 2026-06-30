@@ -40,10 +40,10 @@ For each selected file where `block_size != --block-size`:
 
 1. Verifies metadata by default; `--verify checksum` also verifies SHA-256 checksums
 2. Reads all block data in sequence order
-2. Joins into complete file content
-3. Re-chunks with the new block size
-4. In a per-file transaction: creates new blocks and mappings, removes old mappings, and marks ownerless old blocks as free
-5. Updates `FileNode.block_size`, size, checksum, and version
+3. Joins into complete file content
+4. Re-chunks with the new block size
+5. In a per-file transaction: creates new blocks and mappings, removes old mappings, and marks ownerless old blocks as free
+6. Updates `FileNode.block_size`, size, checksum, and version
 
 If a file changes while it is being rewritten, or if damaged metadata is found, the command skips that file by default. Use `--on-error abort` when a batch should stop on the first problem.
 

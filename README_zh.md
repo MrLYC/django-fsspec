@@ -104,6 +104,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 - [管理命令](docs/zh/management-commands.md)
 - [基准测试](docs/zh/benchmarks.md)
 - [块大小运维](docs/zh/block-size.md)
+- [路标](docs/zh/roadmap.md)
 - [异常体系](docs/zh/exceptions.md)
 
 [English](README.md) | [英文文档](README.md)
