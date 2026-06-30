@@ -23,7 +23,13 @@ from django.test.utils import override_settings
 
 from django_fsspec.exceptions import FileConflictError, FileTooLargeError, PathValidationError
 from django_fsspec.fs import DjangoFileSystem
-from django_fsspec.models import FileBlock, FileNode, Namespace, StorageBlock
+from django_fsspec.models import (
+    FileBlock,
+    FileNode,
+    Namespace,
+    StorageBlock,
+    get_block_size,
+)
 from django_fsspec.operations import (
     read_file,
     read_file_range,
@@ -114,7 +120,7 @@ def run_e2e(db_name):
 
     def test_write_multi_block():
         runner.reset_db()
-        data = b"A" * (256 * 1024 + 100)
+        data = b"A" * (get_block_size() + 100)
         write_file(DEFAULT_NAMESPACE_ID, "/big.bin", data)
         assert read_file(DEFAULT_NAMESPACE_ID, "/big.bin") == data
         node = FileNode.objects.get(path="/big.bin")
@@ -154,7 +160,7 @@ def run_e2e(db_name):
 
     def test_range_read_cross_block():
         runner.reset_db()
-        bs = 256 * 1024
+        bs = get_block_size()
         data = b"X" * bs + b"Y" * bs
         write_file(DEFAULT_NAMESPACE_ID, "/cross.bin", data)
         result = read_file_range(DEFAULT_NAMESPACE_ID, "/cross.bin", bs - 5, bs + 5)
