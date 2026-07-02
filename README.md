@@ -104,6 +104,7 @@ Full benchmark results, including concurrency and manually triggered seeded runs
 - [Management Commands](docs/en/management-commands.md)
 - [Benchmarks](docs/en/benchmarks.md)
 - [Block Size Operations](docs/en/block-size.md)
+- [Local Cache Guide](docs/en/local-cache.md)
 - [Roadmap](docs/en/roadmap.md)
 - [Release Checklist](docs/en/release-checklist.md)
 - [Exceptions](docs/en/exceptions.md)

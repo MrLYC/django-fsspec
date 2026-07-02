@@ -9,6 +9,15 @@
 | `ab` | 追加，创建或追加到已有内容 |
 | `xb` | 排他创建，文件已存在则抛出 `FileExistsError` |
 
+## 本地缓存包装器
+
+fsspec 的本地目录缓存包装器可以和 `DjangoFileSystem` 一起使用：
+`filecache`、`simplecache`、`blockcache` 和 `cached` 别名。当 workload 需要
+本地热读取或大文件稀疏随机读取时，可以使用它们；cache 目录应放在数据库命名空间之外。
+
+选择规则、示例，以及 `simplecache`/`blockcache` 在可变源文件上的注意事项见
+[本地缓存选择指南](local-cache.md)。
+
 ## 目录操作
 
 目录可以是显式目录，也可以由文件路径隐式推导：

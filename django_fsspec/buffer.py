@@ -15,6 +15,11 @@ class DjangoFile(AbstractBufferedFile):
         if mode not in ("rb", "wb", "ab", "xb"):
             raise ValueError(f"Unsupported mode: {mode!r}. Use 'rb', 'wb', 'ab', or 'xb'.")
 
+        # fsspec cache wrappers may pass a known size into the target _open().
+        # DjangoFile still resolves the current FileNode so read handles keep
+        # their file/version conflict guard, but must not forward size twice.
+        supplied_size = kwargs.pop("size", None)
+
         # For read mode, get file size
         size = None
         self._file_id = None
@@ -27,6 +32,8 @@ class DjangoFile(AbstractBufferedFile):
                 self._file_version = info.get("version")
             except FileNotFoundError:
                 raise FileNotFoundError(f"File not found: {path}")
+        elif supplied_size is not None:
+            size = supplied_size
 
         # For exclusive create, check existence early
         if mode == "xb":

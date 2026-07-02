@@ -10,6 +10,9 @@ Usage:
 
 import os
 import sys
+import tempfile
+
+import fsspec
 
 os.environ.setdefault("DJANGO_FSSPEC_BENCH_DB", "sqlite")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo.settings")
@@ -92,6 +95,20 @@ def run_e2e(db_name):
 
     runner = E2ETestRunner()
     fs = DjangoFileSystem(namespace_id=DEFAULT_NAMESPACE_ID)
+
+    def cached_fs(protocol, cache_dir, **kwargs):
+        target = fsspec.filesystem(
+            "django",
+            namespace_id=DEFAULT_NAMESPACE_ID,
+            skip_instance_cache=True,
+        )
+        return fsspec.filesystem(
+            protocol,
+            fs=target,
+            cache_storage=cache_dir,
+            skip_instance_cache=True,
+            **kwargs,
+        )
 
     # --- Write & Read ---
     def test_write_read():
@@ -307,6 +324,68 @@ def run_e2e(db_name):
             assert f.read(5) == b"world"
 
     runner.run("fsspec_seek", test_fsspec_seek)
+
+    # --- fsspec Local Cache Wrappers ---
+    def test_fsspec_filecache_refresh():
+        runner.reset_db()
+        with tempfile.TemporaryDirectory() as tmp:
+            cached = cached_fs("filecache", tmp)
+
+            write_file(DEFAULT_NAMESPACE_ID, "/cache/file.txt", b"version 1")
+            assert cached.cat("/cache/file.txt") == b"version 1"
+
+            write_file(DEFAULT_NAMESPACE_ID, "/cache/file.txt", b"version 2")
+            assert cached.cat("/cache/file.txt") == b"version 1"
+
+            checked = cached_fs("filecache", tmp, check_files=True)
+            assert checked.cat("/cache/file.txt") == b"version 2"
+
+            write_file(DEFAULT_NAMESPACE_ID, "/cache/file.txt", b"version 3")
+            checked.clear_cache()
+            assert checked.cat("/cache/file.txt") == b"version 3"
+
+    runner.run("fsspec_filecache_refresh", test_fsspec_filecache_refresh)
+
+    def test_fsspec_simplecache_read_and_write():
+        runner.reset_db()
+        with tempfile.TemporaryDirectory() as tmp:
+            cached = cached_fs("simplecache", tmp)
+
+            write_file(DEFAULT_NAMESPACE_ID, "/cache/simple/source.txt", b"version 1")
+            assert cached.cat("/cache/simple/source.txt") == b"version 1"
+
+            write_file(DEFAULT_NAMESPACE_ID, "/cache/simple/source.txt", b"version 2")
+            assert cached.cat("/cache/simple/source.txt") == b"version 1"
+
+            with cached.open("/cache/simple/written.txt", "wb") as f:
+                f.write(b"written through simplecache")
+
+            assert read_file(
+                DEFAULT_NAMESPACE_ID,
+                "/cache/simple/written.txt",
+            ) == b"written through simplecache"
+
+    runner.run("fsspec_simplecache_read_and_write", test_fsspec_simplecache_read_and_write)
+
+    def test_fsspec_block_cache_seek_and_refresh():
+        for protocol in ["blockcache", "cached"]:
+            runner.reset_db()
+            with tempfile.TemporaryDirectory() as tmp:
+                cached = cached_fs(protocol, tmp)
+                data = (b"0123456789abcdef" * 8)
+
+                write_file(DEFAULT_NAMESPACE_ID, f"/cache/{protocol}.bin", data)
+                with cached.open(f"/cache/{protocol}.bin", "rb", block_size=8) as f:
+                    f.seek(10)
+                    assert f.read(12) == data[10:22]
+
+                updated = (b"fedcba9876543210" * 8)
+                write_file(DEFAULT_NAMESPACE_ID, f"/cache/{protocol}.bin", updated)
+                cached.clear_cache()
+                with cached.open(f"/cache/{protocol}.bin", "rb", block_size=8) as f:
+                    assert f.read() == updated
+
+    runner.run("fsspec_block_cache_seek_and_refresh", test_fsspec_block_cache_seek_and_refresh)
 
     # --- Unicode ---
     def test_unicode_path():

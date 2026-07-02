@@ -157,6 +157,8 @@ class DjangoFileSystem(AbstractFileSystem):
 
     def mkdir(self, path, create_parents=True, **kwargs):
         path = self._strip_protocol(path)
+        if not path or path == "/":
+            return
         operations.make_directory(
             self.namespace,
             path,
@@ -165,6 +167,8 @@ class DjangoFileSystem(AbstractFileSystem):
 
     def makedirs(self, path, exist_ok=False):
         path = self._strip_protocol(path)
+        if not path or path == "/":
+            return
         try:
             operations.make_directory(self.namespace, path, create_parents=True)
         except FileExistsError:

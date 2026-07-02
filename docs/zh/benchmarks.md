@@ -44,7 +44,7 @@ E2E 覆盖这些面向用户的工作流：
 | 目录语义 | 列目录、隐式目录、持久空目录、递归删除、递归复制/移动、`find`/`tree` 视图 |
 | 冲突处理 | 文件/目录路径冲突、隐式目录目标、已存在移动目标、根目录删除保护 |
 | namespace 行为 | 不同 namespace 下相同路径隔离，以及文件/目录树混合冲突隔离 |
-| fsspec 互操作 | `pipe`、`cat`、`ls`、`find`、`mv`、`copy`、`rm` 与底层 operations API 混合使用 |
+| fsspec 互操作 | `pipe`、`cat`、`ls`、`find`、`mv`、`copy`、`rm`、与底层 operations API 混合使用，以及本地缓存包装器（`filecache`、`simplecache`、`blockcache`、`cached`） |
 | 事务 | 提交、回滚、冲突目录工作流回滚、未关闭写句柄、block 清理 |
 | 并发 | 不同文件写入、同文件覆盖、同文件 append、读写交错、删除/list 竞态、block pool 完整性 |
 
@@ -59,6 +59,7 @@ DJANGO_SETTINGS_MODULE=demo.settings uv run python -m django makemigrations --ch
 uv run python demo/manage.py check
 uv run python benchmarks/e2e_test.py
 uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario cache_filecache_read_large --json /tmp/django-fsspec-cache-smoke.json
 uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 ```
 
@@ -74,6 +75,16 @@ uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 | `large` | 手动大规模大表 benchmark | 50,000 | 500 | 500 | 3 |
 
 所有规模都会保留原有写入、读取、删除、列目录和并发场景的固定操作次数。Push/PR CI 只运行 `--scale ci --seed 1`。手动 `small` 规模用于避免从 CI 的 100 个铺底文件直接跳到 medium 的 10,000 个铺底文件。
+
+缓存场景已加入默认 CI 规模 benchmark 集合：
+
+| 场景 | 衡量内容 | CI 重复次数 | Small | Medium | Large |
+|------|----------|-------------|-------|--------|-------|
+| `cache_filecache_read_large` | `filecache` 首次复制 1MB 文件后的全文件热读取 | 50 | 100 | 250 | 500 |
+| `cache_simplecache_read_large` | `simplecache` 首次复制 1MB 文件后的全文件热读取 | 50 | 100 | 250 | 500 |
+| `cache_blockcache_seek_read` | 通过 `blockcache` 对 1MB 文件执行重复 4KB seek 读取，缓存块大小 64KB | 100 | 200 | 500 | 1000 |
+
+`cached` 别名由 E2E 覆盖，它和 `blockcache` 使用同一实现，因此 benchmark 矩阵中不重复展开。
 
 ## Block Size 对比
 

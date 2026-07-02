@@ -44,7 +44,7 @@ The E2E suite covers these user-facing workflows:
 | Directory semantics | listing, implicit directories, durable empty directories, recursive delete, recursive copy/move, `find`/`tree` views |
 | Conflict handling | file-vs-directory path conflicts, implicit directory targets, existing move destinations, root/delete safety |
 | Namespace behavior | same paths isolated across namespaces and mixed file/tree namespace conflicts |
-| fsspec interoperability | `pipe`, `cat`, `ls`, `find`, `mv`, `copy`, `rm`, and mixed use with lower-level operations APIs |
+| fsspec interoperability | `pipe`, `cat`, `ls`, `find`, `mv`, `copy`, `rm`, mixed use with lower-level operations APIs, and local cache wrappers (`filecache`, `simplecache`, `blockcache`, `cached`) |
 | Transactions | commit, rollback, rollback after conflicting tree workflow, unclosed write handles, and block cleanup |
 | Concurrency | different-file writes, same-file overwrites, same-file appends, read/write interleaving, delete/list races, block-pool integrity |
 
@@ -59,6 +59,7 @@ DJANGO_SETTINGS_MODULE=demo.settings uv run python -m django makemigrations --ch
 uv run python demo/manage.py check
 uv run python benchmarks/e2e_test.py
 uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario write_small --json /tmp/django-fsspec-benchmark-smoke.json
+uv run python benchmarks/run.py --db sqlite --scale ci --seed 1 --scenario cache_filecache_read_large --json /tmp/django-fsspec-cache-smoke.json
 uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 ```
 
@@ -74,6 +75,17 @@ After building a wheel, verify that `demo/`, top-level `tests/`, and `django_fss
 | `large` | Manual large-table benchmark | 50,000 | 500 | 500 | 3 |
 
 All scales keep the original fixed operation counts for write/read/delete/list/concurrent scenarios. Push/PR CI runs `--scale ci --seed 1` only. The `small` manual scale exists to avoid jumping directly from CI's 100 seeded files to medium's 10,000 seeded files.
+
+Cache scenarios are included in the default CI-scale benchmark set:
+
+| Scenario | What it measures | CI repeats | Small | Medium | Large |
+|----------|------------------|------------|-------|--------|-------|
+| `cache_filecache_read_large` | Hot whole-file reads after the first `filecache` copy of a 1MB file | 50 | 100 | 250 | 500 |
+| `cache_simplecache_read_large` | Hot whole-file reads after the first `simplecache` copy of a 1MB file | 50 | 100 | 250 | 500 |
+| `cache_blockcache_seek_read` | Repeated 4KB seek reads from a 1MB file through `blockcache` with 64KB cache blocks | 100 | 200 | 500 | 1000 |
+
+The `cached` alias is covered by E2E tests and shares the same implementation as
+`blockcache`, so it is not duplicated in the benchmark matrix.
 
 ## Block-size comparisons
 

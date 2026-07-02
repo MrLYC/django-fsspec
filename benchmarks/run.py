@@ -25,6 +25,7 @@ import random
 import statistics
 import sys
 import time
+import tempfile
 
 DEFAULT_NAMESPACE_ID = 1
 SEEDED_ROOT = "/bench/seeded"
@@ -62,6 +63,8 @@ SCALES = {
         "seeded_dirs": 10,
         "seeded_repeats": 25,
         "seeded_find_repeats": 1,
+        "cache_read_repeats": 50,
+        "cache_seek_repeats": 100,
     },
     "small": {
         "write_small_n": 1000,
@@ -84,6 +87,8 @@ SCALES = {
         "seeded_dirs": 50,
         "seeded_repeats": 100,
         "seeded_find_repeats": 5,
+        "cache_read_repeats": 100,
+        "cache_seek_repeats": 200,
     },
     "medium": {
         "write_small_n": 1000,
@@ -106,6 +111,8 @@ SCALES = {
         "seeded_dirs": 100,
         "seeded_repeats": 250,
         "seeded_find_repeats": 5,
+        "cache_read_repeats": 250,
+        "cache_seek_repeats": 500,
     },
     "large": {
         "write_small_n": 1000,
@@ -128,6 +135,8 @@ SCALES = {
         "seeded_dirs": 500,
         "seeded_repeats": 500,
         "seeded_find_repeats": 3,
+        "cache_read_repeats": 500,
+        "cache_seek_repeats": 1000,
     },
 }
 
@@ -142,6 +151,9 @@ DEFAULT_CI_SCENARIOS = [
     "ls_nested",
     "delete",
     "seek_read",
+    "cache_filecache_read_large",
+    "cache_simplecache_read_large",
+    "cache_blockcache_seek_read",
     "concurrent_write",
     "concurrent_read",
     "concurrent_mixed",
@@ -414,6 +426,59 @@ def scenario_seek_read(fs, ctx):
     return {"op": "seek_read", "count": n, "file_size": 1048576, "times": times}
 
 
+def scenario_cache_filecache_read_large(fs, ctx):
+    """Read a large file repeatedly through fsspec filecache."""
+    return _scenario_whole_file_cache_read(fs, ctx, "filecache")
+
+
+def scenario_cache_simplecache_read_large(fs, ctx):
+    """Read a large file repeatedly through fsspec simplecache."""
+    return _scenario_whole_file_cache_read(fs, ctx, "simplecache")
+
+
+def scenario_cache_blockcache_seek_read(fs, ctx):
+    """Random seek + read through fsspec blockcache."""
+    import fsspec
+
+    n = get_count(ctx, "cache_seek_repeats")
+    rng = random.Random(ctx["seed"])
+    data = bytes(i % 251 for i in range(1024 * 1024))
+    path = "/bench/cache/blockcache/big.bin"
+    read_size = 4096
+    block_size = 64 * 1024
+    fs.pipe(path, data)
+
+    offsets = [rng.randint(0, len(data) - read_size) for _ in range(n)]
+    with tempfile.TemporaryDirectory() as tmp:
+        cached = fsspec.filesystem(
+            "blockcache",
+            fs=fs,
+            cache_storage=tmp,
+            skip_instance_cache=True,
+        )
+        times = []
+        with cached.open(path, "rb", block_size=block_size) as f:
+            for offset in offsets:
+                def do_seek_read():
+                    f.seek(offset)
+                    return f.read(read_size)
+
+                chunk, t = timed(do_seek_read)
+                expected = data[offset:offset + read_size]
+                if chunk != expected:
+                    raise AssertionError("blockcache seek read returned unexpected bytes")
+                times.append(t)
+
+    return {
+        "op": "cache_blockcache_seek_read",
+        "count": n,
+        "file_size": len(data),
+        "read_size": read_size,
+        "cache_block_size": block_size,
+        "times": times,
+    }
+
+
 def scenario_concurrent_write(fs, ctx):
     """Concurrent writes to different files using thread pool."""
     n_threads = get_count(ctx, "concurrent_threads")
@@ -576,6 +641,42 @@ def _seeded_result(op, count, dataset, times):
     }
 
 
+def _scenario_whole_file_cache_read(fs, ctx, protocol):
+    import fsspec
+
+    n = get_count(ctx, "cache_read_repeats")
+    path = f"/bench/cache/{protocol}/large.bin"
+    data = (f"django-fsspec {protocol} cache benchmark\n".encode() * 32768)[:1024 * 1024]
+    fs.pipe(path, data)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cached = fsspec.filesystem(
+            protocol,
+            fs=fs,
+            cache_storage=tmp,
+            skip_instance_cache=True,
+        )
+        cold_data, cold_s = timed(lambda: cached.cat(path))
+        if cold_data != data:
+            raise AssertionError(f"{protocol} cold read returned unexpected bytes")
+
+        times = []
+        for _ in range(n):
+            hot_data, t = timed(lambda: cached.cat(path))
+            if hot_data != data:
+                raise AssertionError(f"{protocol} hot read returned unexpected bytes")
+            times.append(t)
+
+    return {
+        "op": f"cache_{protocol}_read_large",
+        "cache": protocol,
+        "count": n,
+        "file_size": len(data),
+        "cold_ms": cold_s * 1000,
+        "times": times,
+    }
+
+
 def _run_concurrent(func, batches):
     """Run func(thread_id, batch) concurrently for each batch."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -606,6 +707,9 @@ ALL_SCENARIOS = {
     "ls_nested": scenario_ls_nested,
     "delete": scenario_delete,
     "seek_read": scenario_seek_read,
+    "cache_filecache_read_large": scenario_cache_filecache_read_large,
+    "cache_simplecache_read_large": scenario_cache_simplecache_read_large,
+    "cache_blockcache_seek_read": scenario_cache_blockcache_seek_read,
     "concurrent_write": scenario_concurrent_write,
     "concurrent_read": scenario_concurrent_read,
     "concurrent_mixed": scenario_concurrent_mixed,

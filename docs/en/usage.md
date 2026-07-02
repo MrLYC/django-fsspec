@@ -9,6 +9,16 @@
 | `ab` | Append (create or append to existing) |
 | `xb` | Exclusive create (raises `FileExistsError` if file exists) |
 
+## Local Cache Wrappers
+
+fsspec's local directory cache wrappers work with `DjangoFileSystem`:
+`filecache`, `simplecache`, `blockcache`, and the `cached` alias. Use them when
+the workload benefits from local hot reads or sparse random reads, and keep the
+cache directory outside the database-backed namespace.
+
+See [Local Cache Guide](local-cache.md) for selection rules, examples, and the
+mutable-source caveats for `simplecache` and `blockcache`.
+
 ## Directory Operations
 
 Directories can be explicit or implicit:
