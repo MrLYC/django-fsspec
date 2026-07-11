@@ -67,3 +67,13 @@ print(fs.ls("/"))  # ["/hello.txt"]
 # 删除文件
 fs.rm("/hello.txt")
 ```
+
+如果在独立脚本、worker 或 notebook 中使用，请先初始化 Django：
+
+```python
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "your_project.settings")
+django.setup()
+```

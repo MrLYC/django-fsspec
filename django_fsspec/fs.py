@@ -7,9 +7,35 @@ from fsspec.spec import AbstractFileSystem
 from fsspec.transaction import Transaction
 from fsspec.utils import other_paths
 
-from . import operations
-from .buffer import DjangoFile
-from .models import NODE_TYPE_DIRECTORY, NODE_TYPE_FILE
+from ._django import ensure_django_ready
+
+
+def _operations():
+    ensure_django_ready()
+    from . import operations
+
+    return operations
+
+
+def _django_file():
+    ensure_django_ready()
+    from .buffer import DjangoFile
+
+    return DjangoFile
+
+
+def _file_node_model():
+    ensure_django_ready()
+    from .models import FileNode
+
+    return FileNode
+
+
+def _node_types():
+    ensure_django_ready()
+    from .models import NODE_TYPE_DIRECTORY, NODE_TYPE_FILE
+
+    return NODE_TYPE_DIRECTORY, NODE_TYPE_FILE
 
 
 class DjangoTransaction(Transaction):
@@ -79,6 +105,7 @@ class DjangoFileSystem(AbstractFileSystem):
     def __init__(self, namespace_id=1, **kwargs):
         if "namespace" in kwargs:
             raise TypeError("Use namespace_id, not namespace")
+        ensure_django_ready()
         self._thread_state = threading.local()
         super().__init__(**kwargs)
         self.namespace = namespace_id
@@ -100,6 +127,7 @@ class DjangoFileSystem(AbstractFileSystem):
         self._thread_state.transaction = value
 
     def ls(self, path, detail=True, **kwargs):
+        operations = _operations()
         path = self._strip_protocol(path)
         tolerant = kwargs.get("tolerant", False)
         if not path or path == "/":
@@ -136,12 +164,14 @@ class DjangoFileSystem(AbstractFileSystem):
         return [prefix + name for name in entries]
 
     def info(self, path, **kwargs):
+        operations = _operations()
         path = self._strip_protocol(path)
         if not path or path == "/":
             return {"name": "/", "size": 0, "type": "directory"}
         return operations.get_file_info(self.namespace, path)
 
     def exists(self, path, **kwargs):
+        operations = _operations()
         path = self._strip_protocol(path)
         if not path or path == "/":
             return True
@@ -149,6 +179,7 @@ class DjangoFileSystem(AbstractFileSystem):
 
     def _open(self, path, mode="rb", block_size=None, autocommit=True,
               cache_options=None, **kwargs):
+        DjangoFile = _django_file()
         path = self._strip_protocol(path)
         return DjangoFile(
             self, path, mode=mode, block_size=block_size,
@@ -156,6 +187,7 @@ class DjangoFileSystem(AbstractFileSystem):
         )
 
     def mkdir(self, path, create_parents=True, **kwargs):
+        operations = _operations()
         path = self._strip_protocol(path)
         if not path or path == "/":
             return
@@ -166,6 +198,7 @@ class DjangoFileSystem(AbstractFileSystem):
         )
 
     def makedirs(self, path, exist_ok=False):
+        operations = _operations()
         path = self._strip_protocol(path)
         if not path or path == "/":
             return
@@ -176,14 +209,17 @@ class DjangoFileSystem(AbstractFileSystem):
                 raise
 
     def rmdir(self, path):
+        operations = _operations()
         path = self._strip_protocol(path)
         operations.remove_directory(self.namespace, path, recursive=False)
 
     def _rm(self, path):
+        operations = _operations()
         path = self._strip_protocol(path)
         operations.delete_file(self.namespace, path, recursive=False)
 
     def rm(self, path, recursive=False, maxdepth=None):
+        operations = _operations()
         path = self._strip_protocol(path)
         operations.delete_file(self.namespace, path, recursive=recursive)
 
@@ -191,6 +227,7 @@ class DjangoFileSystem(AbstractFileSystem):
         self._rm(path)
 
     def cp_file(self, path1, path2, **kwargs):
+        operations = _operations()
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
         operations.copy_file(self.namespace, path1, path2)
@@ -241,6 +278,7 @@ class DjangoFileSystem(AbstractFileSystem):
                     raise
 
     def mv(self, path1, path2, recursive=False, maxdepth=None, **kwargs):
+        operations = _operations()
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
         if path1 == path2:
@@ -288,6 +326,8 @@ class DjangoFileSystem(AbstractFileSystem):
 
     def find(self, path, maxdepth=None, withdirs=False, detail=False, **kwargs):
         """List all files under path, using database prefix query."""
+        operations = _operations()
+        node_type_directory, node_type_file = _node_types()
         path = self._strip_protocol(path)
         if path and path != "/":
             try:
@@ -295,7 +335,7 @@ class DjangoFileSystem(AbstractFileSystem):
             except FileNotFoundError:
                 pass
             else:
-                if info["type"] == NODE_TYPE_FILE:
+                if info["type"] == node_type_file:
                     if detail:
                         return {path: info}
                     return [path]
@@ -305,8 +345,7 @@ class DjangoFileSystem(AbstractFileSystem):
         else:
             prefix = path.rstrip("/") + "/"
 
-        from .models import FileNode
-
+        FileNode = _file_node_model()
         all_nodes = list(
             FileNode.objects.filter(
                 namespace=self.namespace,
@@ -323,11 +362,11 @@ class DjangoFileSystem(AbstractFileSystem):
         for node in all_nodes:
             if not within_maxdepth(node.path):
                 continue
-            if node.node_type == NODE_TYPE_DIRECTORY and not withdirs:
+            if node.node_type == node_type_directory and not withdirs:
                 continue
             entry = {
                 "name": node.path,
-                "size": node.size if node.node_type != NODE_TYPE_DIRECTORY else 0,
+                "size": node.size if node.node_type != node_type_directory else 0,
                 "type": node.node_type,
             }
             results[node.path] = entry

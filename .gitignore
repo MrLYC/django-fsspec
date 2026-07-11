@@ -5,6 +5,7 @@ __pycache__/
 django_fsspec/_version.py
 dist/
 build/
+output/
 .coverage
 .pytest_cache/
 *.sqlite3

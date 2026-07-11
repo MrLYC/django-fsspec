@@ -1,7 +1,20 @@
 from fsspec.spec import AbstractBufferedFile
 
-from . import operations
-from .models import get_block_size
+from ._django import ensure_django_ready
+
+
+def _operations():
+    ensure_django_ready()
+    from . import operations
+
+    return operations
+
+
+def _get_block_size():
+    ensure_django_ready()
+    from .models import get_block_size
+
+    return get_block_size()
 
 
 class DjangoFile(AbstractBufferedFile):
@@ -12,6 +25,7 @@ class DjangoFile(AbstractBufferedFile):
 
     def __init__(self, fs, path, mode="rb", block_size=None, autocommit=True,
                  cache_options=None, **kwargs):
+        operations = _operations()
         if mode not in ("rb", "wb", "ab", "xb"):
             raise ValueError(f"Unsupported mode: {mode!r}. Use 'rb', 'wb', 'ab', or 'xb'.")
 
@@ -41,7 +55,7 @@ class DjangoFile(AbstractBufferedFile):
                 raise FileExistsError(f"File already exists: {path}")
 
         if block_size is None:
-            block_size = get_block_size()
+            block_size = _get_block_size()
 
         super().__init__(
             fs, path, mode=mode, block_size=block_size,
@@ -51,6 +65,7 @@ class DjangoFile(AbstractBufferedFile):
 
     def _fetch_range(self, start, end):
         """Read bytes [start, end) from the file."""
+        operations = _operations()
         return operations.read_file_range(
             self.fs.namespace,
             self.path,
@@ -66,6 +81,7 @@ class DjangoFile(AbstractBufferedFile):
 
     def _upload_chunk(self, final=False):
         """Buffer data; on final=True, write everything to the database."""
+        operations = _operations()
         if self.buffer is not None:
             self._upload_buffer += self.buffer.getvalue()
             self.buffer.seek(0)

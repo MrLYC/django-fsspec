@@ -58,6 +58,17 @@ fs.ls("/")  # ["/hello.txt"]
 fs.rm("/hello.txt")
 ```
 
+When using this outside a running Django process (for example, in a standalone
+script, worker, or notebook), configure Django first:
+
+```python
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "your_project.settings")
+django.setup()
+```
+
 ## Configuration
 
 Add to your Django `settings.py`:

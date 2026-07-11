@@ -579,6 +579,13 @@ class TestDjangoFileSystemExtendedAPI(TestCase):
 class TestDjangoFileSystemFsspec(TestCase):
     """Test fsspec.filesystem() registration."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import fsspec
+
+        fsspec.register_implementation("django", DjangoFileSystem, clobber=True)
+
     def test_fsspec_filesystem(self):
         import fsspec
 
