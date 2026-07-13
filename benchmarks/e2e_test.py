@@ -8,9 +8,11 @@ Usage:
     DJANGO_FSSPEC_BENCH_DB=mysql python benchmarks/e2e_test.py
 """
 
+import json
 import os
 import sys
 import tempfile
+from io import StringIO
 
 import fsspec
 
@@ -22,6 +24,7 @@ import django
 django.setup()
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test.utils import override_settings
 
 from django_fsspec.exceptions import FileConflictError, FileTooLargeError, PathValidationError
@@ -109,6 +112,16 @@ def run_e2e(db_name):
             skip_instance_cache=True,
             **kwargs,
         )
+
+    def expect_attention(*args, stdout):
+        try:
+            call_command(*args, stdout=stdout)
+        except CommandError as exc:
+            assert exc.returncode == 1, (
+                f"{args[0]} returned {exc.returncode}, expected attention exit 1"
+            )
+        else:
+            raise AssertionError(f"{args[0]} should have exited with attention code")
 
     # --- Write & Read ---
     def test_write_read():
@@ -386,6 +399,227 @@ def run_e2e(db_name):
                     assert f.read() == updated
 
     runner.run("fsspec_block_cache_seek_and_refresh", test_fsspec_block_cache_seek_and_refresh)
+
+    # --- Operational Runbooks ---
+    def test_ops_runbook_migrate_roundtrip():
+        runner.reset_db()
+        Namespace.objects.get_or_create(
+            id=SECONDARY_NAMESPACE_ID,
+            defaults={"name": "secondary", "description": "Secondary test namespace"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source")
+            exported = os.path.join(tmp, "exported")
+            os.makedirs(os.path.join(source, "nested"))
+            with open(os.path.join(source, "root.txt"), "wb") as f:
+                f.write(b"root")
+            with open(os.path.join(source, "nested", "child.txt"), "wb") as f:
+                f.write(b"child")
+
+            call_command(
+                "fsspec_migrate",
+                f"file://{source}/",
+                "django://1/migrated/",
+                "--manifest",
+                os.path.join(tmp, "import.jsonl"),
+                stdout=StringIO(),
+            )
+            assert read_file(DEFAULT_NAMESPACE_ID, "/migrated/root.txt") == b"root"
+            assert (
+                read_file(DEFAULT_NAMESPACE_ID, "/migrated/nested/child.txt")
+                == b"child"
+            )
+
+            call_command(
+                "fsspec_migrate",
+                "django://1/migrated/",
+                f"file://{exported}/",
+                "--manifest",
+                os.path.join(tmp, "export.jsonl"),
+                stdout=StringIO(),
+            )
+            with open(os.path.join(exported, "root.txt"), "rb") as f:
+                assert f.read() == b"root"
+            with open(os.path.join(exported, "nested", "child.txt"), "rb") as f:
+                assert f.read() == b"child"
+
+            call_command(
+                "fsspec_migrate",
+                "django://1/migrated/root.txt",
+                "django://2/copied.txt",
+                "--manifest",
+                os.path.join(tmp, "namespace.jsonl"),
+                stdout=StringIO(),
+            )
+            assert read_file(SECONDARY_NAMESPACE_ID, "/copied.txt") == b"root"
+
+    runner.run("ops_runbook_migrate_roundtrip", test_ops_runbook_migrate_roundtrip)
+
+    def test_ops_runbook_repair_flow():
+        runner.reset_db()
+        data = b"repairable metadata"
+        write_file(DEFAULT_NAMESPACE_ID, "/ops/repair.txt", data)
+        node = FileNode.objects.get(
+            namespace_id=DEFAULT_NAMESPACE_ID,
+            path="/ops/repair.txt",
+        )
+        block = FileBlock.objects.select_related("block").get(file=node).block
+
+        node.size = 999
+        node.checksum = "bad-file-checksum"
+        node.save(update_fields=["size", "checksum"])
+        block.size = 999
+        block.checksum = "bad-block-checksum"
+        block.save(update_fields=["size", "checksum"])
+
+        fsck_out = StringIO()
+        expect_attention("fsspec_fsck", "--json", stdout=fsck_out)
+        fsck_payload = json.loads(fsck_out.getvalue())
+        assert fsck_payload["ok"] is False
+        assert any(
+            finding["code"] == "block_checksum_mismatch"
+            for finding in fsck_payload["findings"]
+        )
+
+        dry_run_out = StringIO()
+        call_command("fsspec_repair", "--dry-run", "--json", stdout=dry_run_out)
+        repair_payload = json.loads(dry_run_out.getvalue())
+        assert repair_payload["ok"] is True
+        assert repair_payload["dry_run"] is True
+        assert repair_payload["summary"]["block_metadata"] == 1
+        assert repair_payload["summary"]["file_metadata"] == 1
+
+        node.refresh_from_db()
+        block.refresh_from_db()
+        assert node.size == 999
+        assert block.size == 999
+
+        call_command("fsspec_repair", stdout=StringIO())
+        verify_out = StringIO()
+        call_command("fsspec_fsck", "--json", stdout=verify_out)
+        verify_payload = json.loads(verify_out.getvalue())
+        assert verify_payload == {"ok": True, "findings": []}
+        assert read_file(
+            DEFAULT_NAMESPACE_ID,
+            "/ops/repair.txt",
+            verify_checksum=True,
+        ) == data
+
+    runner.run("ops_runbook_repair_flow", test_ops_runbook_repair_flow)
+
+    def test_ops_runbook_rechunk_gc_flow():
+        runner.reset_db()
+        data = (b"abc123" * 40)
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=64):
+            write_file(DEFAULT_NAMESPACE_ID, "/ops/rechunk.bin", data)
+
+        node = FileNode.objects.get(
+            namespace_id=DEFAULT_NAMESPACE_ID,
+            path="/ops/rechunk.bin",
+        )
+        old_block_count = FileBlock.objects.filter(file=node).count()
+        assert node.block_size == 64
+        assert old_block_count > 1
+
+        dry_run_out = StringIO()
+        call_command(
+            "fsspec_rechunk",
+            "--block-size=32768",
+            "--dry-run",
+            "--json",
+            stdout=dry_run_out,
+        )
+        dry_payload = json.loads(dry_run_out.getvalue())
+        assert dry_payload["ok"] is True
+        assert dry_payload["dry_run"] is True
+        assert dry_payload["summary"]["files_rechunked"] == 1
+
+        node.refresh_from_db()
+        assert node.block_size == 64
+        assert StorageBlock.objects.filter(is_free=True).count() == 0
+
+        call_command("fsspec_rechunk", "--block-size=32768", stdout=StringIO())
+        node.refresh_from_db()
+        assert node.block_size == 32768
+        assert FileBlock.objects.filter(file=node).count() == 1
+        assert read_file(
+            DEFAULT_NAMESPACE_ID,
+            "/ops/rechunk.bin",
+            verify_checksum=True,
+        ) == data
+        assert StorageBlock.objects.filter(is_free=True).count() == old_block_count
+
+        gc_dry_run_out = StringIO()
+        call_command("fsspec_gc", "--dry-run", stdout=gc_dry_run_out)
+        assert (
+            f"Would delete {old_block_count} free blocks"
+            in gc_dry_run_out.getvalue()
+        )
+
+        call_command("fsspec_gc", stdout=StringIO())
+        assert StorageBlock.objects.filter(is_free=True).count() == 0
+        call_command("fsspec_fsck", stdout=StringIO())
+
+    runner.run("ops_runbook_rechunk_gc_flow", test_ops_runbook_rechunk_gc_flow)
+
+    def test_ops_runbook_json_exit_codes():
+        runner.reset_db()
+        write_file(DEFAULT_NAMESPACE_ID, "/ops/json.txt", b"json workflow")
+
+        healthy_out = StringIO()
+        call_command("fsspec_fsck", "--json", stdout=healthy_out)
+        assert json.loads(healthy_out.getvalue()) == {"ok": True, "findings": []}
+
+        node = FileNode.objects.get(
+            namespace_id=DEFAULT_NAMESPACE_ID,
+            path="/ops/json.txt",
+        )
+        node.size = 999
+        node.save(update_fields=["size"])
+
+        damaged_out = StringIO()
+        expect_attention("fsspec_fsck", "--json", stdout=damaged_out)
+        damaged_payload = json.loads(damaged_out.getvalue())
+        assert damaged_payload["ok"] is False
+        assert any(
+            finding["code"] == "file_size_mismatch"
+            for finding in damaged_payload["findings"]
+        )
+
+        repair_out = StringIO()
+        call_command("fsspec_repair", "--dry-run", "--json", stdout=repair_out)
+        repair_payload = json.loads(repair_out.getvalue())
+        assert repair_payload["ok"] is True
+        assert repair_payload["dry_run"] is True
+        assert repair_payload["summary"]["file_metadata"] == 1
+        node.refresh_from_db()
+        assert node.size == 999
+
+        call_command("fsspec_repair", stdout=StringIO())
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "target.txt")
+            manifest = os.path.join(tmp, "manifest.jsonl")
+            with open(target, "wb") as f:
+                f.write(b"existing")
+
+            migrate_out = StringIO()
+            expect_attention(
+                "fsspec_migrate",
+                "django://1/ops/json.txt",
+                f"file://{target}",
+                "--json",
+                "--manifest",
+                manifest,
+                stdout=migrate_out,
+            )
+            migrate_payload = json.loads(migrate_out.getvalue())
+            assert migrate_payload["ok"] is False
+            assert migrate_payload["summary"]["files_skipped"] == 1
+            assert migrate_payload["summary"]["conflicts"] == 0
+            with open(target, "rb") as f:
+                assert f.read() == b"existing"
+
+    runner.run("ops_runbook_json_exit_codes", test_ops_runbook_json_exit_codes)
 
     # --- Unicode ---
     def test_unicode_path():

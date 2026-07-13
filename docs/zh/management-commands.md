@@ -1,5 +1,8 @@
 # 管理命令
 
+本文是命令参考。按场景组织的运维流程、事故处理顺序和边界见
+[运维 Runbook](operations-runbook.md)。
+
 ## fsspec_namespace — 命名空间管理
 
 ```bash
@@ -17,13 +20,13 @@ python manage.py fsspec_namespace delete media
 
 ## 运维退出码
 
-`fsck`、`repair` 和 `rechunk` 使用稳定退出码，方便脚本调用：
+`migrate`、`fsck`、`repair` 和 `rechunk` 使用稳定退出码，方便脚本调用：
 
 | 退出码 | 含义 |
 |--------|------|
 | `0` | 命令完成，且没有需要运维关注的 finding |
-| `1` | 命令完成，但 `fsck` 发现损坏、`rechunk` 跳过文件，或 `repair` 仍有未解决损坏 |
-| `2` | 参数错误或命令无法继续执行，例如 `rechunk --on-error abort` |
+| `1` | 命令完成，但 `migrate` 有跳过/冲突、`fsck` 发现损坏、`rechunk` 跳过文件，或 `repair` 仍有未解决损坏 |
+| `2` | 参数错误或命令无法继续执行，例如 migrate options 非法或 `--on-error abort` |
 
 `fsspec_repair` 成功应用安全修复且没有 unresolved damage 时，退出码仍为 `0`。
 
@@ -39,6 +42,48 @@ python manage.py fsspec_fsck
 python manage.py fsspec_gc --dry-run
 python manage.py fsspec_gc
 ```
+
+## fsspec_migrate — 跨文件系统复制
+
+在 fsspec 兼容文件系统之间复制文件：
+
+```bash
+python manage.py fsspec_migrate file:///mnt/import/ django://1/imports/
+python manage.py fsspec_migrate django://1/uploads/ file:///mnt/export/uploads/
+python manage.py fsspec_migrate django://1/a/ django://2/a-copy/ --limit 1000
+python manage.py fsspec_migrate django://1/a/ file:///tmp/a/ --dry-run --json
+python manage.py fsspec_migrate django://1/a/ file:///tmp/a/ --resume .django-fsspec-migrate/run.jsonl
+```
+
+`django://<namespace_id>/<path>` 可用于本包支持的 fsspec URL 场景。
+namespace id 必须是整数。URL host 只用于选择 namespace，不表示认证身份。
+
+重要参数：
+
+```bash
+python manage.py fsspec_migrate SOURCE_URI TARGET_URI \
+  --source-options '{"anon": false}' \
+  --target-options '{}' \
+  --conflict skip \
+  --verify checksum
+```
+
+- `--source-options` 和 `--target-options` 是传给
+  `fsspec.core.url_to_fs()` 的 JSON object。它们不会写入 manifest 或 JSON
+  输出，避免凭据进入命令产物。
+- 默认是 copy-only：永远不删除源文件。
+- 默认冲突策略是 `skip`；目标已存在时报告并以退出码 `1` 结束。
+- `--conflict checksum` 只在源和目标字节一致时跳过已有目标。
+- `--conflict overwrite` 会替换已有目标文件。
+- 默认校验是 `checksum`；只有额外读取成本过高时才使用 `--verify size` 或
+  `--verify off`。
+- 真实执行默认生成 JSONL manifest。可用
+  `DJANGO_FSSPEC_MIGRATE_MANIFEST_DIR` 或 `--manifest` 指定位置。
+- 使用 `--resume <manifest>` 可跳过上一次成功的条目，并重试失败或冲突条目。
+
+命令优先写入目标临时路径，再通过 `mv` 切换到最终路径；当文件系统不支持
+move/rename 时回退为直接写目标。命令不会安装可选 fsspec backend；迁移到 S3 等
+协议时，需要用户自行安装 `s3fs` 等包。
 
 ## fsspec_gc — 清理空闲块
 

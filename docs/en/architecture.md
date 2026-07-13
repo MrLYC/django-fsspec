@@ -17,7 +17,7 @@ binary blocks, and file-to-block mappings.
 | `models.py` | ORM schema and storage settings helpers |
 | `validators.py` | Path validation and Unicode NFC normalization |
 | `checks.py` | Django system/startup checks for block-size drift |
-| `management/commands/` | Operational tooling: `fsspec_stats`, `fsspec_fsck`, `fsspec_repair`, `fsspec_rechunk`, and `fsspec_gc` |
+| `management/commands/` | Operational tooling: `fsspec_migrate`, `fsspec_stats`, `fsspec_fsck`, `fsspec_repair`, `fsspec_rechunk`, and `fsspec_gc` |
 
 ## Three-Table Model
 
@@ -134,8 +134,12 @@ persisted files differ from the current setting.
 
 ## Operational Tooling
 
+For incident and maintenance command sequences, see the
+[Operations Runbook](operations-runbook.md).
+
 | Command / Hook | Purpose |
 |----------------|---------|
+| `fsspec_migrate` | Copies files between fsspec-compatible filesystems with dry-run, checksum verification, conflict policies, and manifest resume |
 | `fsspec_stats` | Reports namespace count, file count/size, used/free blocks, and mapping count |
 | `fsspec_fsck` | Verifies block/file metadata, path-tree conflicts, invalid persisted paths and node types, directory block mappings, shared blocks, and mappings to free blocks; supports JSON findings with severity |
 | `fsspec_repair` | Best-effort repair for derived metadata, live/free block flags, sequence gaps, impossible directory mappings, unreferenced used blocks, and explicit path-conflict recovery |

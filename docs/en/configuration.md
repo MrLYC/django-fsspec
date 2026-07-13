@@ -31,6 +31,16 @@ Use `"metadata"` or `"checksum"` for jobs that must fail fast on damaged databas
 state. `copy_file()` keeps its default copy path low-overhead; pass
 `integrity="checksum"` when a copy must be backup-grade.
 
+## DJANGO_FSSPEC_MIGRATE_MANIFEST_DIR
+
+- **Default**: `<BASE_DIR>/.django-fsspec-migrate`
+- **Description**: Directory for automatically generated `fsspec_migrate`
+  JSONL manifests
+- **Impact**: Only affects real `fsspec_migrate` runs. Dry runs do not create a
+  manifest unless a future command explicitly writes one.
+
+Use `--manifest` on `fsspec_migrate` to override the destination for one run.
+
 ## Changing block size
 
 After changing `DJANGO_FSSPEC_BLOCK_SIZE`:

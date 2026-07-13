@@ -30,6 +30,14 @@
 `"checksum"`。`copy_file()` 默认保持低开销复制路径；需要备份级复制时请传入
 `integrity="checksum"`。
 
+## DJANGO_FSSPEC_MIGRATE_MANIFEST_DIR
+
+- **默认值**：`<BASE_DIR>/.django-fsspec-migrate`
+- **说明**：自动生成的 `fsspec_migrate` JSONL manifest 存放目录
+- **影响**：只影响真实执行的 `fsspec_migrate`。dry-run 不会创建默认 manifest。
+
+单次执行可以用 `fsspec_migrate --manifest` 覆盖输出位置。
+
 ## 修改块大小后的处理
 
 修改 `DJANGO_FSSPEC_BLOCK_SIZE` 后：

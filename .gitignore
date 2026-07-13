@@ -9,3 +9,4 @@ output/
 .coverage
 .pytest_cache/
 *.sqlite3
+.django-fsspec-migrate/

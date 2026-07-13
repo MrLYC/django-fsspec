@@ -23,11 +23,13 @@ uv run python -m build --wheel --outdir /tmp/django-fsspec-build-check
 
 1. 确认用户可见变更已经同步到中英文相关文档。
 2. 更新 `CHANGELOG.md` 的 `Unreleased` 段落。
-3. 用 `makemigrations --check --dry-run` 确认不需要新的 Django migration。
-4. 用 `uv lock --check` 确认 `uv.lock` 已同步。
-5. 确认 `main` 上的 CI `package-check` job 通过。
-6. 只有在 `main` CI 全绿后，才创建 `vX.Y.Z` tag。
-7. 确认发布 workflow 会校验 wheel metadata 版本与 tag 版本一致。
+3. 如果运维命令有变化，同步更新运维 Runbook 和 `benchmarks/e2e_test.py`
+   中的 runbook 级 E2E 覆盖。
+4. 用 `makemigrations --check --dry-run` 确认不需要新的 Django migration。
+5. 用 `uv lock --check` 确认 `uv.lock` 已同步。
+6. 确认 `main` 上的 CI `package-check` job 通过。
+7. 只有在 `main` CI 全绿后，才创建 `vX.Y.Z` tag。
+8. 确认发布 workflow 会校验 wheel metadata 版本与 tag 版本一致。
 
 ## 边界
 

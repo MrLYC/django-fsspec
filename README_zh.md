@@ -14,7 +14,7 @@
 - **命名空间分区** — 整数命名空间提供独立路径空间；授权仍由宿主应用负责
 - **路径校验** — 黑名单规则 + Unicode NFC 归一化
 - **隐式目录** — 无目录记录，从文件路径推导
-- **管理命令** — `fsspec_gc`、`fsspec_fsck`、`fsspec_repair`、`fsspec_rechunk`、`fsspec_stats`
+- **管理命令** — `fsspec_migrate`、`fsspec_gc`、`fsspec_fsck`、`fsspec_repair`、`fsspec_rechunk`、`fsspec_stats`
 
 ## 快速开始
 
@@ -112,6 +112,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 - [使用指南](docs/zh/usage.md)
 - [架构设计](docs/zh/architecture.md)
 - [管理命令](docs/zh/management-commands.md)
+- [运维 Runbook](docs/zh/operations-runbook.md)
 - [基准测试](docs/zh/benchmarks.md)
 - [块大小运维](docs/zh/block-size.md)
 - [本地缓存选择指南](docs/zh/local-cache.md)

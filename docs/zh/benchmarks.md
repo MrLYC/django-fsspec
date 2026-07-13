@@ -45,6 +45,7 @@ E2E 覆盖这些面向用户的工作流：
 | 冲突处理 | 文件/目录路径冲突、隐式目录目标、已存在移动目标、根目录删除保护 |
 | namespace 行为 | 不同 namespace 下相同路径隔离，以及文件/目录树混合冲突隔离 |
 | fsspec 互操作 | `pipe`、`cat`、`ls`、`find`、`mv`、`copy`、`rm`、与底层 operations API 混合使用，以及本地缓存包装器（`filecache`、`simplecache`、`blockcache`、`cached`） |
+| 运维 Runbook | `fsspec_migrate` roundtrip、`fsck`/`repair`、`rechunk`/`gc`、JSON 输出和关注退出码 |
 | 事务 | 提交、回滚、冲突目录工作流回滚、未关闭写句柄、block 清理 |
 | 并发 | 不同文件写入、同文件覆盖、同文件 append、读写交错、删除/list 竞态、block pool 完整性 |
 

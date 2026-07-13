@@ -25,11 +25,13 @@ should remain ignored in the repository.
 1. Confirm user-visible changes are documented in the relevant English and
    Chinese docs.
 2. Update `CHANGELOG.md` under `Unreleased`.
-3. Confirm no Django migration is needed with `makemigrations --check --dry-run`.
-4. Confirm `uv.lock` is current with `uv lock --check`.
-5. Confirm the CI `package-check` job passes on `main`.
-6. Create the `vX.Y.Z` tag only after `main` CI is green.
-7. Confirm the publish workflow verifies that the wheel metadata version matches
+3. If operational commands changed, update the operations runbooks and the
+   runbook-level E2E coverage in `benchmarks/e2e_test.py`.
+4. Confirm no Django migration is needed with `makemigrations --check --dry-run`.
+5. Confirm `uv.lock` is current with `uv lock --check`.
+6. Confirm the CI `package-check` job passes on `main`.
+7. Create the `vX.Y.Z` tag only after `main` CI is green.
+8. Confirm the publish workflow verifies that the wheel metadata version matches
    the tag version.
 
 ## Boundaries

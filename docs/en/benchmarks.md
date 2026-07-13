@@ -45,6 +45,7 @@ The E2E suite covers these user-facing workflows:
 | Conflict handling | file-vs-directory path conflicts, implicit directory targets, existing move destinations, root/delete safety |
 | Namespace behavior | same paths isolated across namespaces and mixed file/tree namespace conflicts |
 | fsspec interoperability | `pipe`, `cat`, `ls`, `find`, `mv`, `copy`, `rm`, mixed use with lower-level operations APIs, and local cache wrappers (`filecache`, `simplecache`, `blockcache`, `cached`) |
+| Operational runbooks | `fsspec_migrate` roundtrip, `fsck`/`repair`, `rechunk`/`gc`, JSON output, and attention exit codes |
 | Transactions | commit, rollback, rollback after conflicting tree workflow, unclosed write handles, and block cleanup |
 | Concurrency | different-file writes, same-file overwrites, same-file appends, read/write interleaving, delete/list races, block-pool integrity |
 

@@ -1,5 +1,8 @@
 # Management Commands
 
+This page is the command reference. For scenario-driven operation flows,
+incident handling order, and limits, see [Operations Runbook](operations-runbook.md).
+
 ## fsspec_namespace — Namespace Management
 
 Manage namespaces:
@@ -19,13 +22,13 @@ The default namespace is created by migrations as `id=1`, `name=default`, and ca
 
 ## Operational Exit Codes
 
-`fsck`, `repair`, and `rechunk` use stable exit codes for scripts:
+`migrate`, `fsck`, `repair`, and `rechunk` use stable exit codes for scripts:
 
 | Exit code | Meaning |
 |-----------|---------|
 | `0` | Command completed without findings that require operator attention |
-| `1` | Command completed, but `fsck` found damage, `rechunk` skipped files, or `repair` still has unresolved damage |
-| `2` | Invalid arguments or an unrecoverable command failure, such as `rechunk --on-error abort` |
+| `1` | Command completed, but `migrate` skipped/conflicted, `fsck` found damage, `rechunk` skipped files, or `repair` still has unresolved damage |
+| `2` | Invalid arguments or an unrecoverable command failure, such as invalid migrate options or `--on-error abort` |
 
 `fsspec_repair` exits `0` after applying safe repairs when no unresolved damage remains.
 
@@ -41,6 +44,53 @@ python manage.py fsspec_fsck
 python manage.py fsspec_gc --dry-run
 python manage.py fsspec_gc
 ```
+
+## fsspec_migrate — Cross-Filesystem Copy
+
+Copy files between fsspec-compatible filesystems:
+
+```bash
+python manage.py fsspec_migrate file:///mnt/import/ django://1/imports/
+python manage.py fsspec_migrate django://1/uploads/ file:///mnt/export/uploads/
+python manage.py fsspec_migrate django://1/a/ django://2/a-copy/ --limit 1000
+python manage.py fsspec_migrate django://1/a/ file:///tmp/a/ --dry-run --json
+python manage.py fsspec_migrate django://1/a/ file:///tmp/a/ --resume .django-fsspec-migrate/run.jsonl
+```
+
+`django://<namespace_id>/<path>` is supported anywhere fsspec URLs are accepted
+by this package. The namespace id must be an integer. The URL host selects the
+namespace; it is not an authentication identity.
+
+Important options:
+
+```bash
+python manage.py fsspec_migrate SOURCE_URI TARGET_URI \
+  --source-options '{"anon": false}' \
+  --target-options '{}' \
+  --conflict skip \
+  --verify checksum
+```
+
+- `--source-options` and `--target-options` are JSON objects passed to
+  `fsspec.core.url_to_fs()`. They are not written to manifest or JSON output, so
+  credentials do not leak through command artifacts.
+- Default behavior is copy-only: source files are never deleted.
+- Default conflict policy is `skip`; existing targets are reported and the
+  command exits `1`.
+- `--conflict checksum` skips existing targets only when source and target bytes
+  match.
+- `--conflict overwrite` replaces existing target files.
+- Default verification is `checksum`; use `--verify size` or `--verify off` only
+  when the extra read is too expensive.
+- Real runs generate a JSONL manifest by default. Use
+  `DJANGO_FSSPEC_MIGRATE_MANIFEST_DIR` or `--manifest` to choose the location.
+- Use `--resume <manifest>` to skip successful entries from a previous run and
+  retry failed or conflicted entries.
+
+The command prefers a temporary target path followed by `mv`, and falls back to
+direct target writes when a filesystem does not support move/rename. It does not
+install optional fsspec backends; install packages such as `s3fs` separately
+when migrating to those protocols.
 
 ## fsspec_gc — Garbage Collection
 
