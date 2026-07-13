@@ -710,13 +710,22 @@ def run_e2e(db_name):
 
     runner.run("block_size_coexistence", test_block_size_coexistence)
 
-    # --- Concurrency Tests (skipped on SQLite — no concurrent write support) ---
+    # --- Concurrency Tests ---
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    skip_concurrency = db_name == "sqlite"
-    if skip_concurrency:
+    def supports_concurrent_write_tests():
+        from django.db import connection
+
+        return connection.vendor != "sqlite"
+
+    run_concurrency_tests = supports_concurrent_write_tests()
+    if not run_concurrency_tests:
         print("  (skipping concurrency tests — SQLite does not support concurrent writes)")
+
+    def run_concurrency_test(name, func):
+        if run_concurrency_tests:
+            runner.run(name, func)
 
     def test_concurrent_write_different_files():
         """Multiple threads writing to different files simultaneously."""
@@ -748,8 +757,10 @@ def run_e2e(db_name):
         total = FileNode.objects.filter(namespace=DEFAULT_NAMESPACE_ID, path__startswith="/conc/").count()
         assert total == n_threads * n_files_per_thread
 
-    if not skip_concurrency:
-        runner.run("concurrent_write_different_files", test_concurrent_write_different_files)
+    run_concurrency_test(
+        "concurrent_write_different_files",
+        test_concurrent_write_different_files,
+    )
 
     def test_concurrent_write_same_file():
         """Multiple threads writing to the same file — one wins, others may get FileConflictError."""
@@ -784,8 +795,7 @@ def run_e2e(db_name):
         data = read_file(DEFAULT_NAMESPACE_ID, "/conc_same.txt")
         assert data.startswith(b"written by thread ")
 
-    if not skip_concurrency:
-        runner.run("concurrent_write_same_file", test_concurrent_write_same_file)
+    run_concurrency_test("concurrent_write_same_file", test_concurrent_write_same_file)
 
     def test_concurrent_read_while_write():
         """Readers should get consistent data while writers update different files."""
@@ -827,8 +837,7 @@ def run_e2e(db_name):
 
         assert len(errors) == 0, f"Errors: {errors}"
 
-    if not skip_concurrency:
-        runner.run("concurrent_read_while_write", test_concurrent_read_while_write)
+    run_concurrency_test("concurrent_read_while_write", test_concurrent_read_while_write)
 
     def test_concurrent_delete_and_list():
         """Delete and list operations running concurrently."""
@@ -863,8 +872,7 @@ def run_e2e(db_name):
 
         assert len(errors) == 0, f"Errors: {errors}"
 
-    if not skip_concurrency:
-        runner.run("concurrent_delete_and_list", test_concurrent_delete_and_list)
+    run_concurrency_test("concurrent_delete_and_list", test_concurrent_delete_and_list)
 
     # --- Transaction Integrity Tests ---
 
@@ -893,8 +901,6 @@ def run_e2e(db_name):
     def test_tx_atomicity_overwrite_rollback():
         """Overwrite with optimistic lock conflict: the conflicting write should
         raise FileConflictError and the file should still exist (not deleted)."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         write_file(DEFAULT_NAMESPACE_ID, "/tx/overwrite.txt", b"original content")
 
@@ -929,13 +935,13 @@ def run_e2e(db_name):
         # File should still exist
         assert file_exists(DEFAULT_NAMESPACE_ID, "/tx/overwrite.txt"), "File should still exist after conflict"
 
-    if not skip_concurrency:
-        runner.run("tx_atomicity_overwrite_rollback", test_tx_atomicity_overwrite_rollback)
+    run_concurrency_test(
+        "tx_atomicity_overwrite_rollback",
+        test_tx_atomicity_overwrite_rollback,
+    )
 
     def test_tx_exclusive_create_race():
         """Two threads racing to create the same file — exactly one should succeed."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         results = {"created": 0, "exists_error": 0, "other_error": 0}
         lock = threading.Lock()
@@ -964,15 +970,12 @@ def run_e2e(db_name):
         data = read_file(DEFAULT_NAMESPACE_ID, "/tx/race.txt")
         assert data.startswith(b"by thread ")
 
-    if not skip_concurrency:
-        runner.run("tx_exclusive_create_race", test_tx_exclusive_create_race)
+    run_concurrency_test("tx_exclusive_create_race", test_tx_exclusive_create_race)
 
     def test_tx_delete_while_reading():
         """Deleting a file while another thread reads it — reader should get
         complete data, truncated data (race between block deletion and read),
         or FileNotFoundError. No crashes or unhandled errors."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         data = b"A" * 1000
         write_file(DEFAULT_NAMESPACE_ID, "/tx/delread.txt", data)
@@ -1022,16 +1025,13 @@ def run_e2e(db_name):
         total = read_results["complete"] + read_results["not_found"] + read_results["partial"]
         assert total == 20, f"All reads should complete: {read_results}"
 
-    if not skip_concurrency:
-        runner.run("tx_delete_while_reading", test_tx_delete_while_reading)
+    run_concurrency_test("tx_delete_while_reading", test_tx_delete_while_reading)
 
     def test_tx_concurrent_overwrite_consistency():
         """Multiple threads overwriting same file — after all writes complete,
         the file should be in a valid, consistent state. Verifies eventual
         consistency (not mid-write snapshot consistency, which requires
         pessimistic locking and is not part of our design)."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         write_file(DEFAULT_NAMESPACE_ID, "/tx/consist.txt", b"init")
 
@@ -1077,15 +1077,15 @@ def run_e2e(db_name):
         assert sequences == list(range(len(sequences))), \
             f"Non-contiguous sequences: {sequences}"
 
-    if not skip_concurrency:
-        runner.run("tx_concurrent_overwrite_consistency", test_tx_concurrent_overwrite_consistency)
+    run_concurrency_test(
+        "tx_concurrent_overwrite_consistency",
+        test_tx_concurrent_overwrite_consistency,
+    )
 
     def test_tx_block_pool_integrity():
         """After many concurrent write/delete cycles, block pool should be consistent:
         - No block referenced by a FileBlock should be marked is_free=True
         - Total used blocks should match sum of file block counts"""
-        if skip_concurrency:
-            return
         runner.reset_db()
 
         errors = []
@@ -1136,13 +1136,10 @@ def run_e2e(db_name):
             expected = list(range(len(sequences)))
             assert sequences == expected, f"Non-contiguous blocks for {node.path}: {sequences}"
 
-    if not skip_concurrency:
-        runner.run("tx_block_pool_integrity", test_tx_block_pool_integrity)
+    run_concurrency_test("tx_block_pool_integrity", test_tx_block_pool_integrity)
 
     def test_tx_concurrent_move_no_dupe():
         """Moving files concurrently should not create duplicates or lose files."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         n = 20
         for i in range(n):
@@ -1180,14 +1177,11 @@ def run_e2e(db_name):
         )
         assert len(paths) == len(set(paths)), f"Duplicate paths found: {paths}"
 
-    if not skip_concurrency:
-        runner.run("tx_concurrent_move_no_dupe", test_tx_concurrent_move_no_dupe)
+    run_concurrency_test("tx_concurrent_move_no_dupe", test_tx_concurrent_move_no_dupe)
 
     def test_tx_concurrent_append_ordering():
         """Multiple threads appending to the same file — final size should equal
         sum of all appended data (no data lost, no duplication)."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         chunk_size = 50
         n_threads = 4
@@ -1221,14 +1215,14 @@ def run_e2e(db_name):
             assert len(data) == expected_size, \
                 f"Thread {t}: expected {expected_size} bytes, got {len(data)}"
 
-    if not skip_concurrency:
-        runner.run("tx_concurrent_append_ordering", test_tx_concurrent_append_ordering)
+    run_concurrency_test(
+        "tx_concurrent_append_ordering",
+        test_tx_concurrent_append_ordering,
+    )
 
     def test_tx_concurrent_same_file_append():
         """Concurrent appends to one file may conflict, but successful appends
         must be durable exactly once with intact block metadata."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         write_file(DEFAULT_NAMESPACE_ID, "/tx/shared_append.log", b"")
 
@@ -1285,13 +1279,13 @@ def run_e2e(db_name):
         assert node.checksum == hashlib.sha256(data).hexdigest()
         assert [fb.sequence for fb in blocks] == list(range(len(blocks)))
 
-    if not skip_concurrency:
-        runner.run("tx_concurrent_same_file_append", test_tx_concurrent_same_file_append)
+    run_concurrency_test(
+        "tx_concurrent_same_file_append",
+        test_tx_concurrent_same_file_append,
+    )
 
     def test_tx_namespace_isolation_under_contention():
         """Writes to different namespaces under contention should never leak across."""
-        if skip_concurrency:
-            return
         runner.reset_db()
         namespace_ids = list(range(DEFAULT_NAMESPACE_ID, DEFAULT_NAMESPACE_ID + 4))
         n_files = 15
@@ -1327,8 +1321,10 @@ def run_e2e(db_name):
             count = FileNode.objects.filter(namespace=ns).count()
             assert count == n_files, f"Namespace {ns}: expected {n_files} files, got {count}"
 
-    if not skip_concurrency:
-        runner.run("tx_namespace_isolation_under_contention", test_tx_namespace_isolation_under_contention)
+    run_concurrency_test(
+        "tx_namespace_isolation_under_contention",
+        test_tx_namespace_isolation_under_contention,
+    )
 
     # --- Mixed Filesystem Semantics ---
     def test_fsspec_mixed_directory_journey():
