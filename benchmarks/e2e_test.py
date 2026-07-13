@@ -199,10 +199,15 @@ def run_e2e(db_name):
             ).order_by("path")
         )
         node_ids = [node.id for node in nodes]
-        storage_blocks = StorageBlock.objects.filter(
-            file_blocks__file_id__in=node_ids,
-            is_free=False,
-        ).distinct()
+        storage_block_ids = list(
+            FileBlock.objects.filter(
+                file_id__in=node_ids,
+                block__is_free=False,
+            )
+            .values_list("block_id", flat=True)
+            .distinct()
+        )
+        storage_blocks = StorageBlock.objects.filter(id__in=storage_block_ids)
         stored_payload_bytes = sum(block.size for block in storage_blocks.iterator())
         stored_field_bytes = sum(
             len(bytes(block.data)) for block in storage_blocks.iterator()
@@ -214,7 +219,7 @@ def run_e2e(db_name):
         assert FileBlock.objects.filter(file_id__in=node_ids).count() == (
             expected_block_count
         )
-        assert storage_blocks.count() == expected_block_count
+        assert len(storage_block_ids) == expected_block_count
         assert stored_payload_bytes == expected_payload_bytes
         assert stored_field_bytes == expected_payload_bytes
 

@@ -286,18 +286,16 @@ class Command(BaseCommand):
                 count=orphaned,
             )
 
-        shared_blocks = (
-            StorageBlock.objects.annotate(
-                file_owner_count=Count("file_blocks__file", distinct=True)
-            )
-            .filter(file_owner_count__gt=1)
+        shared_blocks = FileBlock.objects.values("block_id").annotate(
+            file_owner_count=Count("file_id", distinct=True)
         )
         if namespace is not None:
             shared_blocks = shared_blocks.filter(
-                file_blocks__file__namespace_id=namespace
-            ).distinct()
+                file__namespace_id=namespace,
+            )
+        shared_blocks = shared_blocks.filter(file_owner_count__gt=1)
         for block_id, owner_count in shared_blocks.values_list(
-            "id",
+            "block_id",
             "file_owner_count",
         ):
             add(

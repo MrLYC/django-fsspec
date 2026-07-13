@@ -363,13 +363,15 @@ class Command(BaseCommand):
                 invalid_paths += 1
         summary["invalid_paths"] = invalid_paths
 
-        shared_blocks = StorageBlock.objects.filter(
-            file_blocks__file__in=nodes
-        ).distinct()
+        shared_block_ids = (
+            FileBlock.objects.filter(file__in=nodes)
+            .values_list("block_id", flat=True)
+            .distinct()
+        )
         count = 0
-        for block in shared_blocks.iterator():
+        for block_id in shared_block_ids.iterator():
             owners = (
-                FileBlock.objects.filter(block=block)
+                FileBlock.objects.filter(block_id=block_id)
                 .values("file_id")
                 .distinct()
                 .count()
