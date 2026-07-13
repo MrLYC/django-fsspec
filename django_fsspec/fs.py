@@ -110,6 +110,46 @@ class DjangoFileSystem(AbstractFileSystem):
         super().__init__(**kwargs)
         self.namespace = namespace_id
 
+    @staticmethod
+    def _get_kwargs_from_urls(path):
+        path = str(path)
+        if not path.startswith("django://"):
+            return {}
+        rest = path[len("django://"):]
+        if not rest or rest.startswith("/"):
+            return {}
+        namespace, _, _ = rest.partition("/")
+        try:
+            namespace_id = int(namespace)
+        except ValueError as exc:
+            raise ValueError(
+                f"django URL namespace must be an integer: {namespace!r}"
+            ) from exc
+        if namespace_id <= 0:
+            raise ValueError(
+                f"django URL namespace must be a positive integer: {namespace!r}"
+            )
+        return {"namespace_id": namespace_id}
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        if isinstance(path, list):
+            return [cls._strip_protocol(item) for item in path]
+        path = str(path)
+        if path.startswith("django://"):
+            rest = path[len("django://"):]
+            if not rest:
+                path = "/"
+            elif rest.startswith("/"):
+                path = rest
+            else:
+                _, sep, remainder = rest.partition("/")
+                path = "/" + remainder if sep else "/"
+        elif path.startswith("django::"):
+            path = path[len("django::"):]
+        path = path.rstrip("/")
+        return path or "/"
+
     @property
     def _intrans(self):
         return getattr(self._thread_state, "intrans", False)

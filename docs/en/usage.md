@@ -9,6 +9,21 @@
 | `ab` | Append (create or append to existing) |
 | `xb` | Exclusive create (raises `FileExistsError` if file exists) |
 
+## URL Form
+
+`django-fsspec` supports programmatic fsspec URLs in the form
+`django://<namespace_id>/<path>`. The namespace id must be an integer:
+
+```python
+import fsspec
+
+with fsspec.open("django://1/reports/out.csv", "wb") as f:
+    f.write(b"data")
+```
+
+The URL host is only a namespace selector. It is not an authentication identity;
+authorization remains the host application's responsibility.
+
 ## Local Cache Wrappers
 
 fsspec's local directory cache wrappers work with `DjangoFileSystem`:

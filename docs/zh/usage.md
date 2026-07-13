@@ -9,6 +9,20 @@
 | `ab` | 追加，创建或追加到已有内容 |
 | `xb` | 排他创建，文件已存在则抛出 `FileExistsError` |
 
+## URL 形式
+
+`django-fsspec` 支持程序级 fsspec URL，形式为
+`django://<namespace_id>/<path>`。namespace id 必须是整数：
+
+```python
+import fsspec
+
+with fsspec.open("django://1/reports/out.csv", "wb") as f:
+    f.write(b"data")
+```
+
+URL host 只表示 namespace，不表示认证身份；授权仍由宿主应用负责。
+
 ## 本地缓存包装器
 
 fsspec 的本地目录缓存包装器可以和 `DjangoFileSystem` 一起使用：

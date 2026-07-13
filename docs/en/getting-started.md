@@ -77,3 +77,13 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "your_project.settings")
 django.setup()
 ```
+
+You can also use fsspec URLs. The host part is the integer namespace id:
+
+```python
+with fsspec.open("django://1/hello.txt", "wb") as f:
+    f.write(b"Hello URL")
+
+with fsspec.open("django://1/hello.txt", "rb") as f:
+    assert f.read() == b"Hello URL"
+```
