@@ -40,7 +40,7 @@ The E2E suite covers these user-facing workflows:
 
 | Area | Coverage |
 |------|----------|
-| Core file API | write, read, overwrite, empty files, multi-block files, range reads, checksum verification |
+| Core file API | write, read, overwrite, empty files, varied file sizes and block layout, multi-block files, range reads, checksum verification |
 | Directory semantics | listing, implicit directories, durable empty directories, recursive delete, recursive copy/move, `find`/`tree` views |
 | Conflict handling | file-vs-directory path conflicts, implicit directory targets, existing move destinations, root/delete safety |
 | Namespace behavior | same paths isolated across namespaces and mixed file/tree namespace conflicts |

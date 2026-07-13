@@ -123,6 +123,9 @@ def run_e2e(db_name):
         else:
             raise AssertionError(f"{args[0]} should have exited with attention code")
 
+    def deterministic_payload(size):
+        return bytes((index * 131 + size) % 256 for index in range(size))
+
     # --- Write & Read ---
     def test_write_read():
         runner.reset_db()
@@ -157,6 +160,68 @@ def run_e2e(db_name):
         assert FileBlock.objects.filter(file=node).count() == 2
 
     runner.run("write_multi_block", test_write_multi_block)
+
+    def test_varied_file_sizes_storage_layout():
+        runner.reset_db()
+        block_size = 32 * 1024
+        file_sizes = [
+            0,
+            1,
+            1024,
+            block_size - 1,
+            block_size,
+            block_size + 1,
+            100 * 1024,
+            256 * 1024,
+        ]
+        expected_payload_bytes = sum(file_sizes)
+        expected_block_count = sum(
+            (size + block_size - 1) // block_size
+            for size in file_sizes
+            if size
+        )
+
+        with override_settings(DJANGO_FSSPEC_BLOCK_SIZE=block_size):
+            for size in file_sizes:
+                path = f"/space/{size}.bin"
+                payload = deterministic_payload(size)
+                write_file(DEFAULT_NAMESPACE_ID, path, payload)
+                assert read_file(
+                    DEFAULT_NAMESPACE_ID,
+                    path,
+                    verify_checksum=True,
+                ) == payload
+
+        nodes = list(
+            FileNode.objects.filter(
+                namespace_id=DEFAULT_NAMESPACE_ID,
+                path__startswith="/space/",
+            ).order_by("path")
+        )
+        node_ids = [node.id for node in nodes]
+        storage_blocks = StorageBlock.objects.filter(
+            file_blocks__file_id__in=node_ids,
+            is_free=False,
+        ).distinct()
+        stored_payload_bytes = sum(block.size for block in storage_blocks.iterator())
+        stored_field_bytes = sum(
+            len(bytes(block.data)) for block in storage_blocks.iterator()
+        )
+
+        assert len(nodes) == len(file_sizes)
+        assert sum(node.size for node in nodes) == expected_payload_bytes
+        assert {node.block_size for node in nodes} == {block_size}
+        assert FileBlock.objects.filter(file_id__in=node_ids).count() == (
+            expected_block_count
+        )
+        assert storage_blocks.count() == expected_block_count
+        assert stored_payload_bytes == expected_payload_bytes
+        assert stored_field_bytes == expected_payload_bytes
+
+    runner.run(
+        "varied_file_sizes_storage_layout",
+        test_varied_file_sizes_storage_layout,
+    )
 
     # --- Exclusive Create ---
     def test_exclusive_create():
