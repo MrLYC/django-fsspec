@@ -34,7 +34,7 @@ The settings module selects the database backend from `DJANGO_FSSPEC_BENCH_DB` f
 | `postgres` | PostgreSQL using `POSTGRES_*` environment variables |
 | `oracle` | Oracle using `ORACLE_*` environment variables |
 
-`benchmarks/e2e_test.py` validates behavior against the selected real database backend. SQLite intentionally skips concurrent-write scenarios because SQLite serializes writes, while MySQL, PostgreSQL, and Oracle run the full concurrency set in CI.
+`benchmarks/e2e_test.py` validates behavior against the selected real database backend. SQLite intentionally skips the E2E concurrency suite because SQLite serializes writes, while MySQL, PostgreSQL, and Oracle run the full concurrency set in CI.
 
 The E2E suite covers these user-facing workflows:
 
@@ -116,12 +116,13 @@ CI scale is the best apples-to-apples comparison across all supported database b
 
 | Operation family | SQLite | MySQL 8.0 | PostgreSQL 16 | Oracle 23 | Practical expectation |
 |------------------|--------|-----------|---------------|-----------|-----------------------|
-| Small/medium writes | 4.21-4.38ms | 7.23-8.07ms | 6.24-6.59ms | 6.29-6.54ms | Small files should stay in single-digit milliseconds; server databases add roughly a few milliseconds over SQLite. |
-| Large writes, 1 MB | 8.44ms | 29.95-30.17ms | 29.93-33.39ms | 14.04ms | Large writes are dominated by block persistence; expect low tens of milliseconds on networked databases. |
-| Reads and seeks | 1.44-1.87ms | 2.44-4.57ms | 2.54-9.48ms | 2.81-5.32ms | Reads are usually single-digit milliseconds. PostgreSQL large reads were the slowest networked read path in this CI run. |
-| Overwrite/delete | 3.40-5.80ms | 6.41-11.56ms | 5.03-9.50ms | 5.11-9.32ms | Mutating existing paths usually stays in single-digit to low double-digit milliseconds. |
-| Directory listing | 4.03-4.28ms | 5.87-7.09ms | 6.54-7.17ms | 5.44-7.58ms | Bounded flat and shallow nested listings remain close across server databases. |
-| 8-thread concurrency | read-only 2.14ms; write-heavy locked | 2.84-7.83ms | 2.37-6.74ms | 3.16-7.19ms | Use a server database for concurrent writes. SQLite is fine for local or read-heavy work, but write-heavy concurrent scenarios hit `database is locked`. |
+| Small/medium writes | 3.85-3.90ms | 7.13-11.20ms | 5.84-5.89ms | 6.87-7.55ms | Small files should stay in single-digit milliseconds on most server paths; write-heavy MySQL 8.0 / Django 5.2 was slower in this run. |
+| Large writes, 1 MB | 11.65ms | 45.30-71.00ms | 36.16-37.15ms | 37.18ms | Large writes are dominated by block persistence; expect tens of milliseconds on networked databases in GitHub Actions. |
+| Reads and seeks | 1.26-2.25ms | 2.33-5.24ms | 2.41-9.29ms | 3.02-12.81ms | Reads are usually single-digit milliseconds, with occasional backend-specific 1MB read outliers. |
+| Cache reads | 0.12-0.24ms | 0.10-0.46ms | 0.11-0.53ms | 0.12-0.59ms | Hot local cache paths mostly measure fsspec cache overhead rather than database latency. |
+| Overwrite/delete | 3.05-5.17ms | 6.39-13.67ms | 4.78-8.78ms | 5.66-9.99ms | Mutating existing paths usually stays in single-digit to low double-digit milliseconds. |
+| Directory listing | 3.71-3.97ms | 5.35-7.01ms | 5.92-6.39ms | 5.84-8.50ms | Bounded flat and shallow nested listings remain close across server databases. |
+| 8-thread concurrency | read-only 2.08ms; write-heavy locked | 3.06-9.90ms | 2.24-6.32ms | 3.32-7.61ms | Use a server database for concurrent writes. SQLite is fine for local or read-heavy work, but write-heavy concurrent scenarios hit `database is locked`. |
 
 ### Seeded scale expectations
 
@@ -135,24 +136,24 @@ The published manual seeded runs below show what changes when the metadata table
 | Root `ls` | 13.14-26.86ms | 51.53-124.37ms | Root listing scales with the amount of indexed path volume under the root and should not be a hot-path primitive for large trees. |
 | Recursive `find` | 100.83-144.07ms | 494.83-753.99ms | Recursive tree scans scale close to linearly with file count; avoid frequent full-tree `find` in request paths. |
 
-Backend fit in these results is straightforward: SQLite is appropriate for unit tests, local development, and low-concurrency deployments; use MySQL, PostgreSQL, or Oracle for concurrent writes. PostgreSQL is the most balanced server backend for the measured concurrent and recursive `find` workloads. Oracle performs especially well on large writes, large root listing, and large `exists` in these runs. MySQL remains viable, but large writes and recursive `find` are comparatively slower in the captured data.
+Backend fit in these results is straightforward: SQLite is appropriate for unit tests, local development, and low-concurrency deployments; use MySQL, PostgreSQL, or Oracle for concurrent writes. PostgreSQL is the most balanced server backend for the latest CI run and the measured recursive `find` workload. Oracle remains strong in the manual seeded root-listing and `exists` artifacts, but its latest CI 1MB read/write results are slower than the previous documented run. MySQL remains viable, but large writes and recursive `find` are comparatively slower in the captured data.
 
-Django version changes are measurable but not the main factor. In the latest CI run, MySQL 8.0 under Django 5.2 is about 6.1% lower latency on average than Django 4.2 across the measured table. PostgreSQL 16 under Django 5.2 is about 3.8% lower latency on average, with individual scenarios ranging from a small regression to a larger improvement.
+Django version changes are measurable but not the main factor. In the latest CI run, MySQL 8.0 under Django 5.2 is about 16.7% higher latency on average than Django 4.2 across the measured table, mostly from write-heavy scenarios. PostgreSQL 16 under Django 5.2 is about 0.3% lower latency on average, with individual scenarios ranging from a small regression to a modest improvement.
 
 One interpretation detail matters for `small`, `medium`, and `large`: the common read/write/delete/list/concurrency scenarios keep the same fixed operation counts as CI and reset the database before each scenario. The larger scale changes the seeded dataset size and seeded scenario repeat counts. That means the common read/write rows in the manual seeded artifacts are useful for confirming normal operation behavior in the same workflow, while the seeded rows are the scale-sensitive large-table measurements.
 
 ## Detailed GitHub data
 
-CI-scale data was collected on GitHub Actions on 2026-06-30 from successful CI run [`28412676243`](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) at commit `2236341`. Medium and large seeded data was collected from manually triggered Large Benchmark runs on 2026-06-29. Those seeded runs are retained as the latest available large-table reference artifacts; compare them by scale and scenario rather than treating them as the same commit as the latest CI-scale table.
+CI-scale data was collected on GitHub Actions on 2026-07-13 from successful CI run [`29259244795`](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) at commit `eb8fbc2`. The run used the current default 32KB block size, recorded as `block_size: 32768` in every CI artifact. Medium and large seeded data was collected from manually triggered Large Benchmark runs on 2026-06-29. Those seeded runs are retained as the latest available large-table reference artifacts; compare them by scale and scenario rather than treating them as the same commit as the latest CI-scale table.
 
 | Artifact | Run | Commit | Scope |
 |----------|-----|--------|-------|
-| `benchmark-sqlite` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, SQLite |
-| `benchmark-mysql-8.0-django-4.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, MySQL 8.0 with Django 4.2 |
-| `benchmark-mysql-8.0-django-5.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, MySQL 8.0 with Django 5.2 |
-| `benchmark-postgres-16-django-4.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, PostgreSQL 16 with Django 4.2 |
-| `benchmark-postgres-16-django-5.2` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, PostgreSQL 16 with Django 5.2 |
-| `benchmark-oracle` | [28412676243](https://github.com/MrLYC/django-fsspec/actions/runs/28412676243) | `2236341` | CI scale, Oracle 23 |
+| `benchmark-sqlite` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, SQLite |
+| `benchmark-mysql-8.0-django-4.2` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, MySQL 8.0 with Django 4.2 |
+| `benchmark-mysql-8.0-django-5.2` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, MySQL 8.0 with Django 5.2 |
+| `benchmark-postgres-16-django-4.2` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, PostgreSQL 16 with Django 4.2 |
+| `benchmark-postgres-16-django-5.2` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, PostgreSQL 16 with Django 5.2 |
+| `benchmark-oracle` | [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795) | `eb8fbc2` | CI scale, Oracle 23 |
 | `large-benchmark-sqlite-medium-seed-1` | [28381604379](https://github.com/MrLYC/django-fsspec/actions/runs/28381604379) | `eb31d73` | Medium scale, SQLite |
 | `large-benchmark-mysql-medium-seed-1` | [28381612421](https://github.com/MrLYC/django-fsspec/actions/runs/28381612421) | `eb31d73` | Medium scale, MySQL 8.0 |
 | `large-benchmark-postgres-medium-seed-1` | [28381595934](https://github.com/MrLYC/django-fsspec/actions/runs/28381595934) | `eb31d73` | Medium scale, PostgreSQL 16 |
@@ -168,19 +169,22 @@ Format: average latency / throughput. Successful concurrent results include the 
 
 | Scenario | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PostgreSQL 16 / Django 4.2 | PostgreSQL 16 / Django 5.2 | Oracle 23 |
 |----------|--------|------------------------|------------------------|----------------------------|----------------------------|-----------|
-| `write_small` | 4.21ms / 237 ops/s | 7.74ms / 129 ops/s | 7.23ms / 138 ops/s | 6.59ms / 152 ops/s | 6.36ms / 157 ops/s | 6.29ms / 159 ops/s |
-| `write_medium` | 4.38ms / 228 ops/s | 8.07ms / 124 ops/s | 7.70ms / 130 ops/s | 6.55ms / 153 ops/s | 6.24ms / 160 ops/s | 6.54ms / 153 ops/s |
-| `write_large` | 8.44ms / 118 ops/s | 30.17ms / 33 ops/s | 29.95ms / 33 ops/s | 33.39ms / 30 ops/s | 29.93ms / 33 ops/s | 14.04ms / 71 ops/s |
-| `read_small` | 1.44ms / 693 ops/s | 2.62ms / 381 ops/s | 2.44ms / 409 ops/s | 2.96ms / 338 ops/s | 2.54ms / 393 ops/s | 2.81ms / 355 ops/s |
-| `read_large` | 1.87ms / 536 ops/s | 4.57ms / 219 ops/s | 4.26ms / 235 ops/s | 9.45ms / 106 ops/s | 9.48ms / 105 ops/s | 5.32ms / 188 ops/s |
-| `overwrite` | 5.80ms / 172 ops/s | 11.56ms / 86 ops/s | 10.75ms / 93 ops/s | 9.50ms / 105 ops/s | 9.05ms / 110 ops/s | 9.32ms / 107 ops/s |
-| `ls_flat_1000` | 4.28ms / 234 ops/s | 7.09ms / 141 ops/s | 6.79ms / 147 ops/s | 6.95ms / 144 ops/s | 6.54ms / 153 ops/s | 7.58ms / 132 ops/s |
-| `ls_nested_100dirs` | 4.03ms / 248 ops/s | 6.15ms / 163 ops/s | 5.87ms / 170 ops/s | 7.17ms / 139 ops/s | 6.64ms / 151 ops/s | 5.44ms / 184 ops/s |
-| `delete` | 3.40ms / 294 ops/s | 7.01ms / 143 ops/s | 6.41ms / 156 ops/s | 5.19ms / 193 ops/s | 5.03ms / 199 ops/s | 5.11ms / 196 ops/s |
-| `seek_read` | 1.59ms / 627 ops/s | 3.35ms / 299 ops/s | 3.14ms / 319 ops/s | 5.34ms / 187 ops/s | 6.25ms / 160 ops/s | 3.59ms / 279 ops/s |
-| `concurrent_write_8t` | ERROR: database is locked | 7.83ms / 128 ops/s | 7.62ms / 131 ops/s | 6.56ms / 152 ops/s | 6.74ms / 148 ops/s | 7.19ms / 139 ops/s |
-| `concurrent_read_8t` | 2.14ms / 467 ops/s | 3.19ms / 313 ops/s | 2.84ms / 353 ops/s | 2.73ms / 366 ops/s | 2.37ms / 423 ops/s | 3.16ms / 316 ops/s |
-| `concurrent_mixed_8t` | ERROR: database is locked | 5.11ms / 196 ops/s | 4.62ms / 216 ops/s | 4.30ms / 233 ops/s | 4.21ms / 237 ops/s | 4.58ms / 218 ops/s |
+| `write_small` | 3.85ms / 260 ops/s | 7.13ms / 140 ops/s | 9.93ms / 101 ops/s | 5.89ms / 170 ops/s | 5.84ms / 171 ops/s | 6.87ms / 146 ops/s |
+| `write_medium` | 3.90ms / 256 ops/s | 7.52ms / 133 ops/s | 11.20ms / 89 ops/s | 5.89ms / 170 ops/s | 5.84ms / 171 ops/s | 7.55ms / 132 ops/s |
+| `write_large` | 11.65ms / 86 ops/s | 45.30ms / 22 ops/s | 71.00ms / 14 ops/s | 36.16ms / 28 ops/s | 37.15ms / 27 ops/s | 37.18ms / 27 ops/s |
+| `read_small` | 1.26ms / 796 ops/s | 2.47ms / 405 ops/s | 2.33ms / 430 ops/s | 2.41ms / 415 ops/s | 2.58ms / 387 ops/s | 3.02ms / 331 ops/s |
+| `read_large` | 2.25ms / 444 ops/s | 5.24ms / 191 ops/s | 4.19ms / 239 ops/s | 9.29ms / 108 ops/s | 8.80ms / 114 ops/s | 12.81ms / 78 ops/s |
+| `overwrite` | 5.17ms / 193 ops/s | 10.75ms / 93 ops/s | 13.67ms / 73 ops/s | 8.60ms / 116 ops/s | 8.78ms / 114 ops/s | 9.99ms / 100 ops/s |
+| `ls_flat_1000` | 3.97ms / 252 ops/s | 7.01ms / 143 ops/s | 6.45ms / 155 ops/s | 5.92ms / 169 ops/s | 5.95ms / 168 ops/s | 8.50ms / 118 ops/s |
+| `ls_nested_100dirs` | 3.71ms / 270 ops/s | 5.82ms / 172 ops/s | 5.35ms / 187 ops/s | 6.39ms / 156 ops/s | 6.02ms / 166 ops/s | 5.84ms / 171 ops/s |
+| `delete` | 3.05ms / 328 ops/s | 6.39ms / 157 ops/s | 8.61ms / 116 ops/s | 4.78ms / 209 ops/s | 4.78ms / 209 ops/s | 5.66ms / 177 ops/s |
+| `seek_read` | 1.32ms / 756 ops/s | 2.57ms / 390 ops/s | 2.45ms / 408 ops/s | 2.75ms / 363 ops/s | 2.73ms / 367 ops/s | 3.27ms / 306 ops/s |
+| `cache_filecache_read_large` | 0.12ms / 8674 ops/s | 0.12ms / 8372 ops/s | 0.13ms / 7463 ops/s | 0.12ms / 8253 ops/s | 0.12ms / 8674 ops/s | 0.13ms / 7528 ops/s |
+| `cache_simplecache_read_large` | 0.12ms / 8691 ops/s | 0.10ms / 10048 ops/s | 0.13ms / 7634 ops/s | 0.11ms / 9219 ops/s | 0.11ms / 9105 ops/s | 0.12ms / 8660 ops/s |
+| `cache_blockcache_seek_read` | 0.24ms / 4102 ops/s | 0.46ms / 2172 ops/s | 0.44ms / 2258 ops/s | 0.50ms / 1999 ops/s | 0.53ms / 1895 ops/s | 0.59ms / 1693 ops/s |
+| `concurrent_write_8t` | ERROR: database is locked | 7.35ms / 136 ops/s | 9.90ms / 101 ops/s | 6.31ms / 158 ops/s | 6.32ms / 158 ops/s | 7.61ms / 131 ops/s |
+| `concurrent_read_8t` | 2.08ms / 482 ops/s | 3.06ms / 327 ops/s | 3.40ms / 294 ops/s | 2.34ms / 428 ops/s | 2.24ms / 446 ops/s | 3.32ms / 301 ops/s |
+| `concurrent_mixed_8t` | ERROR: database is locked | 4.59ms / 218 ops/s | 5.54ms / 180 ops/s | 3.97ms / 252 ops/s | 3.93ms / 254 ops/s | 4.91ms / 204 ops/s |
 
 ### Medium common-operation results
 

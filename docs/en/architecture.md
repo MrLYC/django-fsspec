@@ -149,39 +149,39 @@ For incident and maintenance command sequences, see the
 
 ## Performance Baseline
 
-Benchmarked on GitHub Actions (ubuntu-latest) with the historical 256KB block size. Format: average latency / throughput. Source: CI run [28373685170](https://github.com/MrLYC/django-fsspec/actions/runs/28373685170), commit `eb31d73`, `--scale ci --seed 1`.
+Benchmarked on GitHub Actions (ubuntu-latest) with the current default 32KB block size. Format: average latency / throughput. Source: CI run [29259244795](https://github.com/MrLYC/django-fsspec/actions/runs/29259244795), commit `eb8fbc2`, `--scale ci --seed 1`.
 
 ### Write Operations
 
 | Operation | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
 |-----------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
-| write_small (100B) | 4.23ms / 236 ops/s | 8.04ms / 124 ops/s | 7.13ms / 140 ops/s | 6.05ms / 165 ops/s | 5.98ms / 167 ops/s | 6.53ms / 153 ops/s |
-| write_medium (10KB) | 4.47ms / 223 ops/s | 8.39ms / 119 ops/s | 7.51ms / 133 ops/s | 6.08ms / 164 ops/s | 5.97ms / 168 ops/s | 6.91ms / 145 ops/s |
-| write_large (1MB) | 8.21ms / 122 ops/s | 31.28ms / 32 ops/s | 29.34ms / 34 ops/s | 27.14ms / 37 ops/s | 27.13ms / 37 ops/s | 15.94ms / 63 ops/s |
-| overwrite | 4.86ms / 206 ops/s | 10.18ms / 98 ops/s | 9.15ms / 109 ops/s | 7.47ms / 134 ops/s | 7.50ms / 133 ops/s | 8.06ms / 124 ops/s |
+| write_small (100B) | 3.85ms / 260 ops/s | 7.13ms / 140 ops/s | 9.93ms / 101 ops/s | 5.89ms / 170 ops/s | 5.84ms / 171 ops/s | 6.87ms / 146 ops/s |
+| write_medium (10KB) | 3.90ms / 256 ops/s | 7.52ms / 133 ops/s | 11.20ms / 89 ops/s | 5.89ms / 170 ops/s | 5.84ms / 171 ops/s | 7.55ms / 132 ops/s |
+| write_large (1MB) | 11.65ms / 86 ops/s | 45.30ms / 22 ops/s | 71.00ms / 14 ops/s | 36.16ms / 28 ops/s | 37.15ms / 27 ops/s | 37.18ms / 27 ops/s |
+| overwrite | 5.17ms / 193 ops/s | 10.75ms / 93 ops/s | 13.67ms / 73 ops/s | 8.60ms / 116 ops/s | 8.78ms / 114 ops/s | 9.99ms / 100 ops/s |
 
 ### Read Operations
 
 | Operation | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
 |-----------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
-| read_small (100B) | 1.42ms / 705 ops/s | 2.58ms / 387 ops/s | 2.40ms / 416 ops/s | 2.50ms / 400 ops/s | 2.45ms / 408 ops/s | 2.68ms / 373 ops/s |
-| read_large (1MB) | 1.82ms / 549 ops/s | 4.48ms / 223 ops/s | 4.12ms / 243 ops/s | 8.18ms / 122 ops/s | 8.23ms / 121 ops/s | 5.73ms / 174 ops/s |
-| seek_read | 1.56ms / 642 ops/s | 3.34ms / 299 ops/s | 3.05ms / 328 ops/s | 4.83ms / 207 ops/s | 4.63ms / 216 ops/s | 3.85ms / 260 ops/s |
+| read_small (100B) | 1.26ms / 796 ops/s | 2.47ms / 405 ops/s | 2.33ms / 430 ops/s | 2.41ms / 415 ops/s | 2.58ms / 387 ops/s | 3.02ms / 331 ops/s |
+| read_large (1MB) | 2.25ms / 444 ops/s | 5.24ms / 191 ops/s | 4.19ms / 239 ops/s | 9.29ms / 108 ops/s | 8.80ms / 114 ops/s | 12.81ms / 78 ops/s |
+| seek_read | 1.32ms / 756 ops/s | 2.57ms / 390 ops/s | 2.45ms / 408 ops/s | 2.75ms / 363 ops/s | 2.73ms / 367 ops/s | 3.27ms / 306 ops/s |
 
 ### Directory & Delete Operations
 
 | Operation | SQLite | MySQL 8.0 / Django 4.2 | MySQL 8.0 / Django 5.2 | PG 16 / Django 4.2 | PG 16 / Django 5.2 | Oracle 23 |
 |-----------|--------|------------------------|------------------------|--------------------|--------------------|-----------|
-| ls_flat (1000 files) | 4.21ms / 237 ops/s | 7.02ms / 142 ops/s | 6.78ms / 148 ops/s | 6.35ms / 157 ops/s | 6.30ms / 159 ops/s | 8.21ms / 122 ops/s |
-| ls_nested (100 dirs) | 3.95ms / 253 ops/s | 6.10ms / 164 ops/s | 5.84ms / 171 ops/s | 6.28ms / 159 ops/s | 6.21ms / 161 ops/s | 5.60ms / 179 ops/s |
-| delete | 2.67ms / 375 ops/s | 5.77ms / 173 ops/s | 5.18ms / 193 ops/s | 3.81ms / 263 ops/s | 3.67ms / 273 ops/s | 3.98ms / 251 ops/s |
+| ls_flat (1000 files) | 3.97ms / 252 ops/s | 7.01ms / 143 ops/s | 6.45ms / 155 ops/s | 5.92ms / 169 ops/s | 5.95ms / 168 ops/s | 8.50ms / 118 ops/s |
+| ls_nested (100 dirs) | 3.71ms / 270 ops/s | 5.82ms / 172 ops/s | 5.35ms / 187 ops/s | 6.39ms / 156 ops/s | 6.02ms / 166 ops/s | 5.84ms / 171 ops/s |
+| delete | 3.05ms / 328 ops/s | 6.39ms / 157 ops/s | 8.61ms / 116 ops/s | 4.78ms / 209 ops/s | 4.78ms / 209 ops/s | 5.66ms / 177 ops/s |
 
 ### Key Observations
 
-- **SQLite** remains fastest for local reads and seek reads, but concurrent writes and mixed read/write workloads surface SQLite's expected `database is locked` behavior.
-- **MySQL 8.0** improves under Django 5.2 for most measured CI operations compared with Django 4.2, with large writes still the slowest path.
-- **PostgreSQL 16** is stable across Django 4.2 and 5.2; large reads remain slower than SQLite and MySQL in this CI environment.
-- **Oracle 23** has the fastest large-write result among the networked databases in this run and consistent read latency.
+- **SQLite** remains fastest for local small reads, seek reads, and bounded listings, but concurrent writes and mixed read/write workloads surface SQLite's expected `database is locked` behavior.
+- **MySQL 8.0** is viable for concurrent writes, but Django 5.2 was slower than Django 4.2 on write-heavy CI scenarios in this run.
+- **PostgreSQL 16** is the most stable server backend across Django 4.2 and 5.2 in this CI run, with small reads and writes clustered closely.
+- **Oracle 23** is stable on small writes and directory operations, but its 1MB reads and writes were slower than the previous documented run.
 - Full CI scenario data and manually triggered seeded-table results are in [Benchmarks](benchmarks.md).
 
 ## Development Setup
