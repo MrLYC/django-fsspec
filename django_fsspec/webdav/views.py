@@ -1,4 +1,4 @@
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -24,6 +24,36 @@ from .utils import (
 )
 
 _WRITE_METHODS = {"PUT", "DELETE", "COPY", "MOVE", "MKCOL", "PROPPATCH"}
+
+
+def _parse_range_header(range_header: str, file_size: int) -> tuple[int, int] | None:
+    """Parse a single byte-range request into (start, end) half-open bounds.
+
+    Returns ``None`` for multi-range, suffix ranges, or unsatisfiable ranges.
+    """
+    if not range_header.startswith("bytes="):
+        return None
+    spec = range_header[len("bytes="):].strip()
+    if "," in spec:
+        return None
+    if "-" not in spec:
+        return None
+    start_str, end_str = spec.split("-", 1)
+    try:
+        if start_str == "":
+            # Suffix range: not supported for WebDAV streaming
+            return None
+        start = int(start_str)
+        if end_str == "":
+            end = file_size
+        else:
+            end = int(end_str) + 1  # HTTP range is inclusive
+        if start < 0 or end <= start or start >= file_size:
+            return None
+        end = min(end, file_size)
+    except ValueError:
+        return None
+    return start, end
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -170,18 +200,72 @@ class WebDAVView(View):
                 404, "not_found", "Path is a directory", path=path
             )
 
-        data = operations.read_file(namespace_id, path)
-        response = HttpResponse(
-            data,
-            content_type=info.get("content_type") or "application/octet-stream",
+        file_size = info["size"]
+        etag = make_etag(info.get("checksum", ""))
+        last_modified = http_date(info.get("updated"))
+        content_type = info.get("content_type") or "application/octet-stream"
+
+        # If-Range with non-matching ETag falls back to full content.
+        if_range = request.headers.get("If-Range")
+        range_header = (
+            request.headers.get("Range")
+            if (if_range is None or if_range == etag)
+            else None
         )
-        response["ETag"] = make_etag(info.get("checksum", ""))
-        response["Last-Modified"] = http_date(info.get("updated"))
+
+        if range_header:
+            parsed = _parse_range_header(range_header, file_size)
+            if parsed is None:
+                response = HttpResponse(status=416)
+                response["Content-Range"] = f"bytes */{file_size}"
+                return response
+            start, end = parsed
+            response = StreamingHttpResponse(
+                operations.read_file_streaming_range(
+                    namespace_id, path, start, end
+                ),
+                status=206,
+                content_type=content_type,
+            )
+            response["Content-Length"] = str(end - start)
+            response["Content-Range"] = f"bytes {start}-{end - 1}/{file_size}"
+            response["ETag"] = etag
+            response["Last-Modified"] = last_modified
+            response["Accept-Ranges"] = "bytes"
+            return response
+
+        response = StreamingHttpResponse(
+            operations.read_file_streaming_range(
+                namespace_id, path, 0, file_size
+            ),
+            content_type=content_type,
+        )
+        response["Content-Length"] = str(file_size)
+        response["ETag"] = etag
+        response["Last-Modified"] = last_modified
+        response["Accept-Ranges"] = "bytes"
         return response
 
     def head(self, request, namespace_id: int, path: str):
-        response = self.get(request, namespace_id, path)
-        response.content = b""
+        try:
+            info = operations.get_file_info(namespace_id, path)
+        except FileNotFoundError as exc:
+            return responses.error_response(404, "not_found", str(exc), path=path)
+
+        if info.get("type") == "directory":
+            return responses.error_response(
+                404, "not_found", "Path is a directory", path=path
+            )
+
+        response = HttpResponse(
+            status=200,
+            content_type=info.get("content_type")
+            or "application/octet-stream",
+        )
+        response["Content-Length"] = str(info["size"])
+        response["ETag"] = make_etag(info.get("checksum", ""))
+        response["Last-Modified"] = http_date(info.get("updated"))
+        response["Accept-Ranges"] = "bytes"
         return response
 
     def put(self, request, namespace_id: int, path: str):
@@ -199,9 +283,39 @@ class WebDAVView(View):
         content_type = resolve_content_type(
             path, request.headers.get("Content-Type", "")
         )
-        operations.write_file(
-            namespace_id, path, request.body, content_type=content_type
+
+        chunk_size = operations.get_block_size()
+        writer = operations.StreamingFileWriter(
+            namespace_id, path, "wb", content_type=content_type
         )
+        writer.start()
+        try:
+            while True:
+                chunk = request.read(chunk_size)
+                if not chunk:
+                    break
+                writer.write_chunk(chunk, final=False)
+            writer.write_chunk(b"", final=True)
+            writer.commit()
+        except Exception as exc:
+            writer.discard()
+            if isinstance(
+                exc,
+                (
+                    FileNotFoundError,
+                    FileExistsError,
+                    IsADirectoryError,
+                    NotADirectoryError,
+                    PathValidationError,
+                    FileTooLargeError,
+                    FileConflictError,
+                    DataIntegrityError,
+                    ValueError,
+                ),
+            ):
+                raise
+            raise ValueError(f"Failed to write file: {exc}") from exc
+
         return HttpResponse(status=204 if existed else 201)
 
     def delete(self, request, namespace_id: int, path: str):

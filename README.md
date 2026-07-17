@@ -81,6 +81,20 @@ DJANGO_FSSPEC_BLOCK_SIZE = 32 * 1024
 DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 ```
 
+### WebDAV large uploads
+
+The WebDAV `PUT` handler streams the request body directly from Django. To allow
+uploads larger than Django's default in-memory limit, set:
+
+```python
+# Allow unlimited request bodies for streamed WebDAV uploads.
+# Tune this to a value appropriate for your deployment.
+DATA_UPLOAD_MAX_MEMORY_SIZE = None
+```
+
+If this setting is left at the Django default (2.5MB), `PUT` requests larger
+than that limit will be rejected before django-fsspec can process them.
+
 ## Supported File Modes
 
 | Mode | Description |

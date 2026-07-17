@@ -57,6 +57,8 @@ class DjangoFile(AbstractBufferedFile):
         if block_size is None:
             block_size = _get_block_size()
 
+        self._writer = None
+
         super().__init__(
             fs, path, mode=mode, block_size=block_size,
             autocommit=autocommit, cache_options=cache_options,
@@ -77,39 +79,47 @@ class DjangoFile(AbstractBufferedFile):
 
     def _initiate_upload(self):
         """Prepare for upload. Called once before _upload_chunk."""
-        self._upload_buffer = b""
+        operations = _operations()
+        content_type = self.kwargs.pop("content_type", "")
+        self._writer = operations.StreamingFileWriter(
+            self.fs.namespace,
+            self.path,
+            self.mode,
+            content_type=content_type,
+            block_size=self.blocksize,
+        )
+        self._writer.start()
 
     def _upload_chunk(self, final=False):
-        """Buffer data; on final=True, write everything to the database."""
-        operations = _operations()
+        """Persist the current buffer chunk to the database."""
         if self.buffer is not None:
-            self._upload_buffer += self.buffer.getvalue()
+            chunk = self.buffer.getvalue()
             self.buffer.seek(0)
             self.buffer.truncate()
-
-        if final:
-            if self.mode == "xb":
-                operations.create_file_exclusive(
-                    self.fs.namespace, self.path, self._upload_buffer
-                )
-            elif self.mode == "ab":
-                operations.append_file(
-                    self.fs.namespace, self.path, self._upload_buffer
-                )
-            else:
-                operations.write_file(
-                    self.fs.namespace, self.path, self._upload_buffer
-                )
-            self._upload_buffer = b""
+        else:
+            chunk = b""
+        self._writer.write_chunk(chunk, final=final)
+        if final and self.autocommit:
+            self._writer.commit()
+            self._writer = None
         return True
 
     def commit(self):
         """Finalize a deferred transaction write before the DB transaction exits."""
         if not self.closed:
             self.close()
+        if self._writer is not None:
+            try:
+                self._writer.commit()
+            finally:
+                self._writer = None
 
     def discard(self):
         """Discard a deferred transaction write without flushing it later."""
         self.closed = True
         self.buffer = None
-        self._upload_buffer = b""
+        if self._writer is not None:
+            try:
+                self._writer.discard()
+            finally:
+                self._writer = None

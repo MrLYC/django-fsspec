@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- Stream file reads and writes through the fsspec interface using a new `StreamingFileWriter`, keeping per-handle memory bounded by the flush chunk size instead of the full file size.
+- Stream WebDAV `GET`, `HEAD`, and `PUT` responses; `GET` now supports single byte-range requests (`Range: bytes=start-end`) and returns `206 Partial Content`.
+- Add streaming-specific tests for chunked writes, append, copy, WebDAV range requests, and large `PUT` uploads.
+
+### Changed
+- `append_file()` now appends new storage blocks at the end of the existing file instead of loading and rewriting the entire file.
+- `copy_file()` now copies source blocks incrementally instead of loading both files into memory.
+- `read_file_range()` with integrity policies now validates only the blocks that overlap the requested byte range.
+
+### Fixed
+- WebDAV `HEAD` no longer reads the file body just to discard it.
+
 ## [0.2.3] - 2026-07-01
 
 ### Added

@@ -75,6 +75,13 @@ class WebDAVTestCase(TestCase):
             method, url, data=data, content_type=content_type, **extra
         )
 
+    @staticmethod
+    def _response_content(response):
+        """Read response body whether it is a regular or streaming response."""
+        if getattr(response, "streaming", False):
+            return b"".join(response.streaming_content)
+        return response.content
+
 
 class TestBasicAuth(WebDAVTestCase):
     def test_unauthenticated_request_returns_401(self):
@@ -101,7 +108,7 @@ class TestAuthorization(WebDAVTestCase):
 
         response = self._request("get", "admin.txt", user=self.superuser)
         assert response.status_code == 200
-        assert response.content == b"hi"
+        assert self._response_content(response) == b"hi"
 
     def test_global_permission_user_can_access_all_namespaces(self):
         perm = Permission.objects.get(codename="write_namespace")
@@ -178,7 +185,7 @@ class TestGetAndHead(WebDAVTestCase):
 
         response = self._request("get", "get.txt", user=self.reader)
         assert response.status_code == 200
-        assert response.content == b"hello"
+        assert self._response_content(response) == b"hello"
         assert response["Content-Type"] == "text/plain"
         assert response["ETag"]
         assert response["Last-Modified"]
@@ -206,7 +213,7 @@ class TestPut(WebDAVTestCase):
         assert response.status_code == 201
 
         response = self._request("get", "put.txt", user=self.writer)
-        assert response.content == b"created"
+        assert self._response_content(response) == b"created"
 
     def test_put_overwrites_file(self):
         write_file(1, "/put.txt", b"old")
@@ -217,7 +224,7 @@ class TestPut(WebDAVTestCase):
         assert response.status_code == 204
 
         response = self._request("get", "put.txt", user=self.writer)
-        assert response.content == b"new"
+        assert self._response_content(response) == b"new"
 
     def test_put_if_none_match_star_prevents_overwrite(self):
         write_file(1, "/put.txt", b"old")
@@ -302,7 +309,7 @@ class TestCopyAndMove(WebDAVTestCase):
         assert response.status_code == 201
 
         response = self._request("get", "dst.txt", user=self.writer)
-        assert response.content == b"source"
+        assert self._response_content(response) == b"source"
 
     def test_copy_overwrite_false_returns_412(self):
         write_file(1, "/src.txt", b"source")
@@ -332,7 +339,7 @@ class TestCopyAndMove(WebDAVTestCase):
         assert response.status_code == 404
 
         response = self._request("get", "move-dst.txt", user=self.writer)
-        assert response.content == b"move me"
+        assert self._response_content(response) == b"move me"
 
     def test_copy_cross_namespace_rejected(self):
         Namespace.objects.create(id=2, name="other-ns")
@@ -569,7 +576,7 @@ class TestWebDAVViewEdgeCases(WebDAVTestCase):
         assert response.status_code == 204
 
         response = self._request("get", "move-dst.txt", user=self.writer)
-        assert response.content == b"new"
+        assert self._response_content(response) == b"new"
 
     def test_put_file_too_large(self):
         with override_settings(DJANGO_FSSPEC_MAX_FILE_SIZE=10):

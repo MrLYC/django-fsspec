@@ -1,9 +1,10 @@
 import hashlib
+import sys
 import uuid
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, F, Value, When
+from django.db.models import Case, Count, F, Max, Value, When
 from django.db.models.functions import StrIndex, Substr
 
 from .exceptions import (
@@ -204,6 +205,231 @@ def _release_blocks(file_node: FileNode):
     _release_file_blocks([file_node.pk])
 
 
+class StreamingFileWriter:
+    """Stateful writer that persists file chunks incrementally inside one transaction.
+
+    Each writer corresponds to a single fsspec file handle. It opens a
+    ``transaction.atomic()`` context in ``start()`` and either commits or rolls
+    it back in ``commit()`` / ``discard()``. This keeps memory bounded by the
+    flushed chunk size rather than the full file size.
+    """
+
+    def __init__(
+        self,
+        namespace: int,
+        path: str,
+        mode: str,
+        content_type: str = "",
+        block_size: int | None = None,
+    ):
+        self.namespace = namespace
+        self.path = validate_path(path)
+        _reject_root_file_path(self.path)
+        if mode not in ("wb", "ab", "xb"):
+            raise ValueError(f"Unsupported writer mode: {mode!r}")
+        self.mode = mode
+        self.content_type = content_type
+        self.stored_block_size = (
+            block_size if block_size is not None else get_block_size()
+        )
+        self.max_file_size = get_max_file_size()
+        self._atomic = None
+        self._file_node: FileNode | None = None
+        self._size = 0
+        self._hasher = hashlib.sha256()
+        self._sequence = 0
+        self._closed = False
+
+    def start(self) -> FileNode:
+        """Acquire namespace lock and prepare the target FileNode."""
+        if self._atomic is not None:
+            raise RuntimeError("Writer already started")
+        self._atomic = transaction.atomic()
+        self._atomic.__enter__()
+        try:
+            _lock_namespace_for_write(self.namespace)
+            _ensure_parent_directory(self.namespace, self.path)
+            existing = _ensure_file_target(self.namespace, self.path)
+
+            if self.mode == "xb":
+                if existing is not None:
+                    raise FileExistsError(f"File already exists: {self.path}")
+                try:
+                    self._file_node = FileNode.objects.create(
+                        namespace_id=self.namespace,
+                        path=self.path,
+                        node_type=NODE_TYPE_FILE,
+                        size=0,
+                        block_size=self.stored_block_size,
+                        checksum="",
+                        content_type=self.content_type,
+                    )
+                except IntegrityError:
+                    raise FileExistsError(f"File already exists: {self.path}")
+                self._initial_version = self._file_node.version
+                self._sequence = 0
+            elif self.mode == "wb":
+                if existing is not None:
+                    old_version = existing.version
+                    updated = FileNode.objects.filter(
+                        pk=existing.pk, version=old_version
+                    ).update(
+                        size=0,
+                        block_size=self.stored_block_size,
+                        checksum="",
+                        content_type=(
+                            self.content_type
+                            if self.content_type
+                            else existing.content_type
+                        ),
+                        version=old_version + 1,
+                    )
+                    if updated == 0:
+                        raise FileConflictError(
+                            f"File was modified by another process: {self.path}"
+                        )
+                    _release_blocks(existing)
+                    existing.refresh_from_db()
+                    self._file_node = existing
+                    self._initial_version = self._file_node.version
+                    self._sequence = 0
+                else:
+                    self._file_node = FileNode.objects.create(
+                        namespace_id=self.namespace,
+                        path=self.path,
+                        node_type=NODE_TYPE_FILE,
+                        size=0,
+                        block_size=self.stored_block_size,
+                        checksum="",
+                        content_type=self.content_type,
+                    )
+                    self._initial_version = self._file_node.version
+                    self._sequence = 0
+            elif self.mode == "ab":
+                if existing is not None:
+                    _validate_file_node_type(existing)
+                    self._file_node = existing
+                    self._initial_version = existing.version
+                    self._size = existing.size
+                    self._sequence = self._next_sequence(existing)
+                    self._hash_existing_blocks(existing)
+                else:
+                    self._file_node = FileNode.objects.create(
+                        namespace_id=self.namespace,
+                        path=self.path,
+                        node_type=NODE_TYPE_FILE,
+                        size=0,
+                        block_size=self.stored_block_size,
+                        checksum="",
+                        content_type=self.content_type,
+                    )
+                    self._initial_version = self._file_node.version
+                    self._sequence = 0
+
+            return self._file_node
+        except Exception:
+            self._atomic.__exit__(*sys.exc_info())
+            self._atomic = None
+            raise
+
+    def _next_sequence(self, file_node: FileNode) -> int:
+        max_seq = (
+            FileBlock.objects.filter(file=file_node).aggregate(Max("sequence"))[
+                "sequence__max"
+            ]
+            or 0
+        )
+        return max_seq + 1
+
+    def _hash_existing_blocks(self, file_node: FileNode):
+        """Initialize the hasher by streaming existing blocks one at a time."""
+        for file_block in _ordered_file_blocks(file_node):
+            self._hasher.update(bytes(file_block.block.data))
+
+    def write_chunk(self, chunk: bytes, *, final: bool = False):
+        """Persist a chunk and optionally finalize the file metadata."""
+        if self._closed:
+            raise ValueError("Writer is closed")
+        if self._atomic is None:
+            raise RuntimeError("Writer must be started before writing chunks")
+
+        if chunk:
+            new_size = self._size + len(chunk)
+            if new_size > self.max_file_size:
+                raise FileTooLargeError(
+                    f"File size {new_size} exceeds maximum {self.max_file_size}"
+                )
+
+            chunks = _chunk_data(chunk, self.stored_block_size)
+            blocks = _allocate_blocks(chunks)
+            file_blocks = [
+                FileBlock(file=self._file_node, block=block, sequence=self._sequence + i)
+                for i, block in enumerate(blocks)
+            ]
+            FileBlock.objects.bulk_create(file_blocks)
+
+            self._size = new_size
+            self._hasher.update(chunk)
+            self._sequence += len(blocks)
+
+        if final:
+            self._finalize()
+
+    def _finalize(self):
+        """Write size/checksum/version back to the FileNode."""
+        if self._file_node is None:
+            return
+        # For append mode the version must be bumped; for write/create the
+        # version was already set to the target value in start().
+        if self.mode == "ab":
+            new_version = self._initial_version + 1
+        else:
+            new_version = self._initial_version
+        updated = FileNode.objects.filter(
+            pk=self._file_node.pk, version=self._initial_version
+        ).update(
+            size=self._size,
+            block_size=self.stored_block_size,
+            checksum=self._hasher.hexdigest(),
+            content_type=(
+                self.content_type
+                if self.content_type
+                else self._file_node.content_type
+            ),
+            version=new_version,
+        )
+        if updated == 0:
+            raise FileConflictError(
+                f"File was modified by another process: {self.path}"
+            )
+        self._file_node.refresh_from_db()
+
+    def commit(self):
+        """Commit the underlying transaction."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._atomic is not None:
+            self._atomic.__exit__(None, None, None)
+            self._atomic = None
+
+    def discard(self):
+        """Rollback the underlying transaction."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._atomic is not None:
+            transaction.set_rollback(True)
+            self._atomic.__exit__(None, None, None)
+            self._atomic = None
+
+    @property
+    def file_node(self) -> FileNode:
+        if self._file_node is None:
+            raise RuntimeError("Writer has not been started")
+        return self._file_node
+
+
 def _node_info(file_node: FileNode) -> dict:
     """Return fsspec-style metadata for a stored node."""
     if file_node.node_type == NODE_TYPE_DIRECTORY:
@@ -297,111 +523,31 @@ def _ensure_file_target(namespace: int, path: str):
 def write_file(
     namespace: int, path: str, data: bytes, content_type: str = ""
 ) -> FileNode:
-    """Write data to a file path. Creates or overwrites the file.
-
-    """
-    path = validate_path(path)
-    _reject_root_file_path(path)
-    max_file_size = get_max_file_size()
-    if len(data) > max_file_size:
-        raise FileTooLargeError(
-            f"File size {len(data)} exceeds maximum {max_file_size}"
-        )
-
-    block_size = get_block_size()
-    chunks = _chunk_data(data, block_size)
-    file_checksum = _compute_checksum(data)
-
-    with transaction.atomic():
-        _lock_namespace_for_write(namespace)
-        _ensure_parent_directory(namespace, path)
-        file_node = _ensure_file_target(namespace, path)
-
-        if file_node is not None:
-            old_version = file_node.version
-
-            # Optimistic lock: UPDATE ... WHERE version = old_version
-            updated = FileNode.objects.filter(
-                pk=file_node.pk, version=old_version
-            ).update(
-                size=len(data),
-                block_size=block_size,
-                checksum=file_checksum,
-                content_type=content_type if content_type else file_node.content_type,
-                version=old_version + 1,
-            )
-            if updated == 0:
-                raise FileConflictError(
-                    f"File was modified by another process: {path}"
-                )
-            _release_blocks(file_node)
-            file_node.refresh_from_db()
-        else:
-            file_node = FileNode.objects.create(
-                namespace_id=namespace,
-                path=path,
-                node_type=NODE_TYPE_FILE,
-                size=len(data),
-                block_size=block_size,
-                checksum=file_checksum,
-                content_type=content_type,
-            )
-
-        blocks = _allocate_blocks(chunks)
-        FileBlock.objects.bulk_create(
-            [
-                FileBlock(file=file_node, block=block, sequence=i)
-                for i, block in enumerate(blocks)
-            ]
-        )
-
-    return file_node
+    """Write data to a file path. Creates or overwrites the file."""
+    writer = StreamingFileWriter(namespace, path, "wb", content_type=content_type)
+    writer.start()
+    try:
+        writer.write_chunk(data, final=True)
+        writer.commit()
+    except Exception:
+        writer.discard()
+        raise
+    return writer.file_node
 
 
 def create_file_exclusive(
     namespace: int, path: str, data: bytes, content_type: str = ""
 ) -> FileNode:
     """Create a file exclusively. Raises FileExistsError if it already exists."""
-    path = validate_path(path)
-    _reject_root_file_path(path)
-    max_file_size = get_max_file_size()
-    if len(data) > max_file_size:
-        raise FileTooLargeError(
-            f"File size {len(data)} exceeds maximum {max_file_size}"
-        )
-
-    block_size = get_block_size()
-    chunks = _chunk_data(data, block_size)
-    file_checksum = _compute_checksum(data)
-
-    with transaction.atomic():
-        _lock_namespace_for_write(namespace)
-        _ensure_parent_directory(namespace, path)
-        if _ensure_file_target(namespace, path) is not None:
-            raise FileExistsError(f"File already exists: {path}")
-
-        try:
-            file_node = FileNode.objects.create(
-                namespace_id=namespace,
-                path=path,
-                node_type=NODE_TYPE_FILE,
-                size=len(data),
-                block_size=block_size,
-                checksum=file_checksum,
-                content_type=content_type,
-            )
-        except IntegrityError:
-            raise FileExistsError(f"File already exists: {path}")
-
-        blocks = _allocate_blocks(chunks)
-        FileBlock.objects.bulk_create(
-            [
-                FileBlock(file=file_node, block=block, sequence=i)
-                for i, block in enumerate(blocks)
-            ]
-        )
-
-    return file_node
+    writer = StreamingFileWriter(namespace, path, "xb", content_type=content_type)
+    writer.start()
+    try:
+        writer.write_chunk(data, final=True)
+        writer.commit()
+    except Exception:
+        writer.discard()
+        raise
+    return writer.file_node
 
 
 def append_file(
@@ -409,80 +555,18 @@ def append_file(
 ) -> FileNode:
     """Append data to an existing file, or create it if it doesn't exist.
 
-    The read and write are wrapped in a single transaction with optimistic
-    locking, so concurrent appends will raise FileConflictError rather than
-    silently losing data.
+    The write is wrapped in a single transaction with namespace locking, so
+    concurrent appends to the same file are serialized.
     """
-    path = validate_path(path)
-    _reject_root_file_path(path)
-    max_file_size = get_max_file_size()
-    block_size = get_block_size()
-
-    with transaction.atomic():
-        _lock_namespace_for_write(namespace)
-        _ensure_parent_directory(namespace, path)
-        file_node = _ensure_file_target(namespace, path)
-
-        if file_node is not None:
-            # Read existing data within the transaction
-            existing_data = _load_file_data(file_node)
-            new_data = existing_data + data
-
-            if len(new_data) > max_file_size:
-                raise FileTooLargeError(
-                    f"File size {len(new_data)} exceeds maximum {max_file_size}"
-                )
-
-            old_version = file_node.version
-
-            chunks = _chunk_data(new_data, block_size)
-            file_checksum = _compute_checksum(new_data)
-
-            updated = FileNode.objects.filter(
-                pk=file_node.pk, version=old_version
-            ).update(
-                size=len(new_data),
-                block_size=block_size,
-                checksum=file_checksum,
-                content_type=content_type if content_type else file_node.content_type,
-                version=old_version + 1,
-            )
-            if updated == 0:
-                raise FileConflictError(
-                    f"File was modified by another process: {path}"
-                )
-            _release_blocks(file_node)
-            file_node.refresh_from_db()
-        else:
-            # Create new file
-            new_data = data
-            if len(new_data) > max_file_size:
-                raise FileTooLargeError(
-                    f"File size {len(new_data)} exceeds maximum {max_file_size}"
-                )
-
-            chunks = _chunk_data(new_data, block_size)
-            file_checksum = _compute_checksum(new_data)
-
-            file_node = FileNode.objects.create(
-                namespace_id=namespace,
-                path=path,
-                node_type=NODE_TYPE_FILE,
-                size=len(new_data),
-                block_size=block_size,
-                checksum=file_checksum,
-                content_type=content_type,
-            )
-
-        blocks = _allocate_blocks(chunks)
-        FileBlock.objects.bulk_create(
-            [
-                FileBlock(file=file_node, block=block, sequence=i)
-                for i, block in enumerate(blocks)
-            ]
-        )
-
-    return file_node
+    writer = StreamingFileWriter(namespace, path, "ab", content_type=content_type)
+    writer.start()
+    try:
+        writer.write_chunk(data, final=True)
+        writer.commit()
+    except Exception:
+        writer.discard()
+        raise
+    return writer.file_node
 
 
 def read_file(
@@ -508,6 +592,90 @@ def read_file(
 
     policy = _get_read_integrity(integrity, verify_checksum=verify_checksum)
     return _load_file_data(file_node, integrity=policy)
+
+
+def _read_file_range_with_integrity(
+    file_node: FileNode, start: int, end: int, policy: str
+) -> bytes:
+    """Read a byte range verifying only the blocks that overlap the range.
+
+    The structural checks (sequence contiguity and total size) are performed
+    globally because they depend on the whole block graph; per-block integrity
+    checks are applied only to blocks that overlap the requested range.
+    """
+    _validate_file_node_type(file_node)
+
+    if _path_has_descendants(
+        file_node.namespace_id, file_node.path, exclude_pk=file_node.pk
+    ):
+        raise DataIntegrityError(
+            f"File {file_node.path} has descendant paths; run fsspec_repair --dry-run"
+        )
+
+    if start < 0 or end <= start:
+        return b""
+
+    file_blocks = _ordered_file_blocks(file_node)
+
+    # Structural checks across the whole file.
+    sequences = [fb.sequence for fb in file_blocks]
+    expected_sequences = list(range(len(file_blocks)))
+    if sequences != expected_sequences:
+        raise DataIntegrityError(
+            f"File {file_node.path} has non-contiguous block sequences: {sequences}"
+        )
+
+    total_size = sum(len(fb.block.data) for fb in file_blocks)
+    if total_size != file_node.size:
+        raise DataIntegrityError(
+            f"File {file_node.path} size mismatch: stored={file_node.size}, "
+            f"actual={total_size}"
+        )
+
+    # Collect requested range, verifying overlapping blocks.
+    length = end - start
+    emitted = 0
+    offset = 0
+    parts = []
+    for fb in file_blocks:
+        block = fb.block
+        block_data = bytes(block.data)
+        block_len = len(block_data)
+        block_end = offset + block_len
+
+        if block_end <= start:
+            offset += block_len
+            continue
+        if offset >= end:
+            break
+
+        # This block overlaps the requested range; verify it.
+        if block.is_free:
+            raise DataIntegrityError(
+                f"File {file_node.path} references free block {block.pk}"
+            )
+        if block.size != block_len:
+            raise DataIntegrityError(
+                f"Block {block.pk} size mismatch: stored={block.size}, "
+                f"actual={block_len}"
+            )
+        if policy == INTEGRITY_CHECKSUM and block.checksum:
+            actual = _compute_checksum(block_data)
+            if actual != block.checksum:
+                raise DataIntegrityError(
+                    f"Block {block.pk} checksum mismatch: "
+                    f"expected {block.checksum}, got {actual}"
+                )
+
+        chunk_start = max(0, start - offset)
+        chunk_end = min(block_len, end - offset)
+        parts.append(block_data[chunk_start:chunk_end])
+        emitted += chunk_end - chunk_start
+        if emitted >= length:
+            break
+        offset += block_len
+
+    return b"".join(parts)
 
 
 def read_file_range(
@@ -540,31 +708,108 @@ def read_file_range(
 
     policy = _get_read_integrity(integrity)
     if policy != INTEGRITY_OFF:
-        data = _load_file_data(file_node, integrity=policy)
-        return data[start:end]
+        return _read_file_range_with_integrity(file_node, start, end, policy)
 
     block_size = file_node.block_size
     if block_size <= 0:
         raise DataIntegrityError(
             f"File {path} has invalid block size: {block_size}"
         )
-    start_block = start // block_size
-    end_block = (end - 1) // block_size if end > 0 else 0
 
-    file_blocks = (
-        FileBlock.objects.filter(
-            file=file_node, sequence__gte=start_block, sequence__lte=end_block
-        )
-        .select_related("block")
-        .order_by("sequence")
-    )
+    # Walk blocks in sequence order to find those covering [start, end).
+    # Blocks may differ in size (e.g. after streaming appends), so we use
+    # actual block lengths rather than assuming a uniform block_size.
+    file_blocks = _ordered_file_blocks(file_node)
+    offset = 0
+    start_idx = None
+    end_idx = None
+    for i, fb in enumerate(file_blocks):
+        block_len = len(fb.block.data)
+        if start_idx is None and offset + block_len > start:
+            start_idx = i
+        if end_idx is None and offset + block_len >= end:
+            end_idx = i + 1
+            break
+        offset += block_len
 
-    result = b"".join(fb.block.data for fb in file_blocks)
+    if start_idx is None:
+        # Request starts at or past EOF
+        return b""
+    if end_idx is None:
+        # Request extends past EOF; return up to EOF
+        end_idx = len(file_blocks)
+
+    selected = file_blocks[start_idx:end_idx]
+    result = b"".join(bytes(fb.block.data) for fb in selected)
 
     # Trim to requested range
-    offset_in_first = start % block_size
+    first_block_start_offset = sum(
+        len(file_blocks[j].block.data) for j in range(start_idx)
+    )
+    offset_in_first = start - first_block_start_offset
     length = end - start
     return result[offset_in_first : offset_in_first + length]
+
+
+def read_file_streaming_range(
+    namespace: int,
+    path: str,
+    start: int,
+    end: int,
+    *,
+    file_id: int | None = None,
+    version: int | None = None,
+):
+    """Yield byte chunks for the byte range [start, end) without loading the whole file.
+
+    Blocks are streamed in sequence order and trimmed to the requested range.
+    """
+    path = validate_path(path)
+
+    try:
+        if file_id is not None:
+            file_node = FileNode.objects.get(namespace_id=namespace, pk=file_id)
+        else:
+            file_node = FileNode.objects.get(namespace_id=namespace, path=path)
+    except FileNode.DoesNotExist:
+        raise FileNotFoundError(f"File not found: {path}")
+
+    if file_node.node_type == NODE_TYPE_DIRECTORY:
+        raise IsADirectoryError(f"Path is a directory: {path}")
+    if version is not None and file_node.version != version:
+        raise FileConflictError(
+            f"File was modified while reading: {path}"
+        )
+
+    if start < 0 or end <= start:
+        return
+
+    length = end - start
+    emitted = 0
+    offset = 0
+    file_blocks = (
+        FileBlock.objects.filter(file=file_node)
+        .select_related("block")
+        .order_by("sequence", "id")
+        .iterator()
+    )
+    for fb in file_blocks:
+        block_data = bytes(fb.block.data)
+        block_len = len(block_data)
+        block_end = offset + block_len
+        if block_end <= start:
+            offset += block_len
+            continue
+        if offset >= end:
+            break
+
+        chunk_start = max(0, start - offset)
+        chunk_end = min(block_len, end - offset)
+        yield block_data[chunk_start:chunk_end]
+        emitted += chunk_end - chunk_start
+        if emitted >= length:
+            break
+        offset += block_len
 
 
 def get_file_info(namespace: int, path: str) -> dict:
@@ -809,8 +1054,48 @@ def copy_file(namespace: int, src: str, dst: str, *, integrity: str | None = Non
         raise IsADirectoryError(f"Source is a directory: {src}")
     if integrity is None:
         integrity = INTEGRITY_OFF
-    data = read_file(namespace, src, integrity=integrity)
-    write_file(namespace, dst, data, content_type=src_info.get("content_type", ""))
+
+    try:
+        src_node = FileNode.objects.get(namespace_id=namespace, path=src)
+    except FileNode.DoesNotExist:
+        raise FileNotFoundError(f"File not found: {src}")
+    _validate_file_node_type(src_node)
+
+    writer = StreamingFileWriter(
+        namespace,
+        dst,
+        "wb",
+        content_type=src_info.get("content_type", ""),
+    )
+    writer.start()
+    try:
+        for fb in _ordered_file_blocks(src_node):
+            block = fb.block
+            block_data = bytes(block.data)
+            if integrity == INTEGRITY_CHECKSUM and block.checksum:
+                actual = _compute_checksum(block_data)
+                if actual != block.checksum:
+                    raise DataIntegrityError(
+                        f"Block {block.pk} checksum mismatch: "
+                        f"expected {block.checksum}, got {actual}"
+                    )
+            if integrity == INTEGRITY_METADATA:
+                if block.is_free:
+                    raise DataIntegrityError(
+                        f"File {src} references free block {block.pk}"
+                    )
+                if block.size != len(block_data):
+                    raise DataIntegrityError(
+                        f"Block {block.pk} size mismatch: stored={block.size}, "
+                        f"actual={len(block_data)}"
+                    )
+            writer.write_chunk(block_data, final=False)
+        writer.write_chunk(b"", final=True)
+        writer.commit()
+    except Exception:
+        writer.discard()
+        raise
+    return writer.file_node
 
 
 def move_file(namespace: int, src: str, dst: str, overwrite: bool = False):
