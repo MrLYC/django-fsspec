@@ -1,4 +1,5 @@
 from django.test import TestCase
+from django.urls import reverse
 
 from django_fsspec.models import Namespace
 from django_fsspec.operations import write_file
@@ -70,6 +71,73 @@ class TestWebDAVStreaming(WebDAVTestCase):
         assert response.status_code == 201
         response = self._request("get", "empty-put.txt", user=self.reader)
         assert b"".join(response.streaming_content) == b""
+
+    def test_get_range_invalid_headers_return_416(self):
+        write_file(1, "/range-invalid.txt", b"0123456789")
+        bad_headers = [
+            "text=0-5",       # wrong unit
+            "bytes=0-5,8-9",  # multi-range
+            "bytes=-5",       # suffix range
+            "bytes=5",        # missing dash
+            "bytes=foo-bar",  # non-integer
+        ]
+        for header in bad_headers:
+            response = self._request(
+                "get", "range-invalid.txt", user=self.reader, HTTP_RANGE=header
+            )
+            assert response.status_code == 416, header
+
+    def test_head_not_found_returns_404(self):
+        response = self._request("head", "missing-head.txt", user=self.reader)
+        assert response.status_code == 404
+
+    def test_head_directory_returns_404(self):
+        write_file(1, "/head-dir/file.txt", b"x")
+        response = self._request("head", "head-dir", user=self.reader)
+        assert response.status_code == 404
+
+    def test_put_root_returns_405(self):
+        url = reverse("webdav_root", kwargs={"namespace_id": 1})
+        response = self.client.put(
+            url, data=b"x", content_type="application/octet-stream",
+            HTTP_AUTHORIZATION=_basic_auth("writer", "writer-pass"),
+        )
+        assert response.status_code == 405
+
+    def test_delete_root_returns_405(self):
+        url = reverse("webdav_root", kwargs={"namespace_id": 1})
+        response = self.client.delete(
+            url, HTTP_AUTHORIZATION=_basic_auth("writer", "writer-pass")
+        )
+        assert response.status_code == 405
+
+    def test_propfind_depth_infinity_returns_403(self):
+        response = self._request(
+            "propfind", "", user=self.reader, HTTP_DEPTH="infinity"
+        )
+        assert response.status_code == 403
+
+    def test_copy_root_returns_405(self):
+        response = self._request(
+            "copy", "", user=self.writer, HTTP_DESTINATION="http://testserver/webdav/1/dst"
+        )
+        assert response.status_code == 405
+
+    def test_move_root_returns_405(self):
+        response = self._request(
+            "move", "", user=self.writer, HTTP_DESTINATION="http://testserver/webdav/1/dst"
+        )
+        assert response.status_code == 405
+
+    def test_write_without_auth_returns_401(self):
+        response = self.client.put(
+            self._url("no-auth.txt"), data=b"x", content_type="application/octet-stream"
+        )
+        assert response.status_code == 401
+
+    def test_invalid_path_returns_400(self):
+        response = self._request("get", "../escape.txt", user=self.reader)
+        assert response.status_code == 400
 
 
 class TestWebDAVStreamingNamespace(TestCase):

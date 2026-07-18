@@ -73,6 +73,13 @@ class TestDjangoFileSystem(TestCase):
         with pytest.raises(ValueError, match="Unsupported mode"):
             self.fs.open("/test.txt", "r+b")
 
+    def test_read_with_supplied_size_kwarg(self):
+        """Cache wrappers may pass a known size to _open(); ensure it is accepted."""
+        write_file(1, "/sized-read.txt", b"hello")
+        f = DjangoFile(self.fs, "/sized-read.txt", mode="rb", size=5)
+        assert f.size == 5
+        f.close()
+
     def test_ls_root(self):
         write_file(1, "/a.txt", b"a")
         write_file(1, "/b.txt", b"b")
