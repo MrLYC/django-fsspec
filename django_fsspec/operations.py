@@ -337,8 +337,9 @@ class StreamingFileWriter:
             FileBlock.objects.filter(file=file_node).aggregate(Max("sequence"))[
                 "sequence__max"
             ]
-            or 0
         )
+        if max_seq is None:
+            return 0
         return max_seq + 1
 
     def _hash_existing_blocks(self, file_node: FileNode):

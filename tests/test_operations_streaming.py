@@ -189,6 +189,17 @@ class TestStreamingFileWriter(TestCase):
         with pytest.raises(FileNotFoundError):
             _ensure_parent_directory(1, "/missing/file.txt", require_exists=True)
 
+    def test_append_to_empty_file_starts_sequence_at_zero(self):
+        write_file(1, "/empty-append.txt", b"")
+        append_file(1, "/empty-append.txt", b"data")
+        node = FileNode.objects.get(path="/empty-append.txt")
+        sequences = list(
+            FileBlock.objects.filter(file=node)
+            .order_by("sequence")
+            .values_list("sequence", flat=True)
+        )
+        assert sequences == [0]
+
     def test_read_file_streaming_range_file_id_not_found(self):
         with pytest.raises(FileNotFoundError):
             list(read_file_streaming_range(1, "/no-id.txt", 0, 1, file_id=999999))
