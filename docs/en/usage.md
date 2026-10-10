@@ -230,3 +230,55 @@ writer overwrites the file before a later range read, the handle raises
 ## Database Routing
 
 Ensure all three django_fsspec tables reside on the same database. Transactions cannot span multiple databases.
+
+## Query Parquet with DuckDB
+
+DuckDB's Python client can register an fsspec filesystem and query it with SQL.
+`DjangoFileSystem` uses the `django` protocol. A file stored at
+`/warehouse/sales.parquet` is queried as `django:///warehouse/sales.parquet`.
+The third slash matters: DuckDB joins the protocol and the path as
+`django://` plus `/warehouse/sales.parquet`. Two slashes drop the leading
+slash, and django-fsspec then rejects the path.
+
+```python
+import duckdb
+import fsspec
+
+fs = fsspec.filesystem("django", namespace_id=1)
+duckdb.register_filesystem(fs)
+
+duckdb.sql("""
+COPY (
+    SELECT * FROM (VALUES
+        ('Beijing', 12.5::DOUBLE),
+        ('Shanghai', 9.0::DOUBLE),
+        ('Shenzhen', 15.75::DOUBLE)
+    ) sales(city, amount)
+) TO 'django:///warehouse/sales.parquet' (FORMAT PARQUET)
+""")
+
+duckdb.sql("""
+SELECT city, amount
+FROM read_parquet('django:///warehouse/*.parquet')
+ORDER BY city
+""").show()
+```
+
+Install DuckDB beside the application. It is not a dependency of django-fsspec:
+
+```bash
+pip install duckdb
+```
+
+A standalone script that bootstraps a temporary SQLite database is in
+[`examples/duckdb_parquet.py`](../../examples/duckdb_parquet.py):
+
+```bash
+uv run --extra duckdb python examples/duckdb_parquet.py
+```
+
+DuckDB calls `open` and `info` from worker threads. Use a database those
+threads can open. A SQLite `:memory:` database belongs to one connection, so
+another thread will not see the file. File-backed SQLite and the server
+databases work. The Parquet payload must also stay within
+`DJANGO_FSSPEC_MAX_FILE_SIZE` (default 2MB).

@@ -37,9 +37,13 @@ Changelog = "https://github.com/MrLYC/django-fsspec/blob/main/CHANGELOG.md"
 Issues = "https://github.com/MrLYC/django-fsspec/issues"
 
 [project.optional-dependencies]
+duckdb = [
+    "duckdb",
+]
 dev = [
     "build",
     "django-test-migrations",
+    "duckdb",
     "pytest",
     "pytest-cov",
     "pytest-django",

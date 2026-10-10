@@ -125,6 +125,7 @@ Full benchmark results, including concurrency and manually triggered seeded runs
 - [Getting Started](docs/en/getting-started.md)
 - [Configuration](docs/en/configuration.md)
 - [Usage Guide](docs/en/usage.md)
+- [DuckDB Parquet example](examples/duckdb_parquet.py)
 - [Architecture](docs/en/architecture.md)
 - [Management Commands](docs/en/management-commands.md)
 - [Operations Runbook](docs/en/operations-runbook.md)

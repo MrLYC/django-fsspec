@@ -6,6 +6,7 @@
 - Stream file reads and writes through the fsspec interface using a new `StreamingFileWriter`, keeping per-handle memory bounded by the flush chunk size instead of the full file size.
 - Stream WebDAV `GET`, `HEAD`, and `PUT` responses; `GET` now supports single byte-range requests (`Range: bytes=start-end`) and returns `206 Partial Content`.
 - Add streaming-specific tests for chunked writes, append, copy, WebDAV range requests, and large `PUT` uploads.
+- Add a DuckDB example that registers `DjangoFileSystem` and queries Parquet files.
 
 ### Changed
 - `append_file()` now appends new storage blocks at the end of the existing file instead of loading and rewriting the entire file.

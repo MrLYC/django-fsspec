@@ -110,6 +110,7 @@ DJANGO_FSSPEC_MAX_FILE_SIZE = 2 * 1024 * 1024
 - [快速入门](docs/zh/getting-started.md)
 - [配置说明](docs/zh/configuration.md)
 - [使用指南](docs/zh/usage.md)
+- [DuckDB Parquet 示例](examples/duckdb_parquet.py)
 - [架构设计](docs/zh/architecture.md)
 - [管理命令](docs/zh/management-commands.md)
 - [运维 Runbook](docs/zh/operations-runbook.md)

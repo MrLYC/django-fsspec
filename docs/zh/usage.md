@@ -220,3 +220,52 @@ with fs.transaction:
 ## 数据库路由
 
 确保 django_fsspec 的三张表在同一个数据库上，事务不能跨库。
+
+## 用 DuckDB 查询 Parquet
+
+DuckDB 的 Python 客户端可以把 fsspec 文件系统注册进去，再用 SQL 查询。
+`DjangoFileSystem` 的协议是 `django`。存在 `/warehouse/sales.parquet` 的文件，
+查询路径写成 `django:///warehouse/sales.parquet`。第三个斜杠不能省：DuckDB
+把协议和路径拼成 `django://` 加上 `/warehouse/sales.parquet`。少一个斜杠会丢掉
+开头的 `/`，django-fsspec 会拒绝这条路径。
+
+```python
+import duckdb
+import fsspec
+
+fs = fsspec.filesystem("django", namespace_id=1)
+duckdb.register_filesystem(fs)
+
+duckdb.sql("""
+COPY (
+    SELECT * FROM (VALUES
+        ('Beijing', 12.5::DOUBLE),
+        ('Shanghai', 9.0::DOUBLE),
+        ('Shenzhen', 15.75::DOUBLE)
+    ) sales(city, amount)
+) TO 'django:///warehouse/sales.parquet' (FORMAT PARQUET)
+""")
+
+duckdb.sql("""
+SELECT city, amount
+FROM read_parquet('django:///warehouse/*.parquet')
+ORDER BY city
+""").show()
+```
+
+DuckDB 不是 django-fsspec 的依赖，需要另外安装：
+
+```bash
+pip install duckdb
+```
+
+[`examples/duckdb_parquet.py`](../../examples/duckdb_parquet.py) 是一份可直接运行的脚本，它会自己建一个临时 SQLite 数据库：
+
+```bash
+uv run --extra duckdb python examples/duckdb_parquet.py
+```
+
+DuckDB 会在工作线程里调用 `open` 和 `info`。数据库必须让这些线程也能打开。
+SQLite 的 `:memory:` 数据库只属于创建它的那个连接，其他线程看不到刚写入的文件。
+文件型 SQLite 以及 PostgreSQL、MySQL 这类服务器数据库可以。Parquet 内容也不能
+超过 `DJANGO_FSSPEC_MAX_FILE_SIZE`（默认 2MB）。
